@@ -1,0 +1,209 @@
+"""
+SIMPLE VERSION - Copy this entire code into a Jupyter Notebook cell
+===================================================================
+"""
+
+import pandas as pd
+import numpy as np
+from IPython.display import display
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+sns.set_style("whitegrid")
+
+# ============================================================================
+# PERFORMANCE METRICS SUMMARY
+# ============================================================================
+
+perf_data = {
+    'Dataset': ['Student Performance', 'University Ranking', 'Enrollment', 'Dropout', 'Budget Prediction'],
+    'Model': ['XGBoost', 'RandomForest', 'XGBoost', 'RandomForest', 'XGBoost'],
+    'Accuracy': [98.92, 95.9, 99.7, 77.3, 0.015],
+    'R² Score': [0.7375, 0.1538, 0.9970, 0.4932, 0.2037],
+    'MAE': [0.728, 2327411, 217559, 0.286, 2292479],
+    'RMSE': [1.927, 14307363, 348071, 0.639, 13878987]
+}
+
+df_perf = pd.DataFrame(perf_data)
+
+def highlight_best(row):
+    best_models = {
+        'Student Performance': 'XGBoost',
+        'University Ranking': 'RandomForest',
+        'Enrollment': 'XGBoost',
+        'Dropout': 'RandomForest',
+        'Budget Prediction': 'XGBoost'
+    }
+    if row['Model'] == best_models.get(row['Dataset'], ''):
+        return ['background-color: #90EE90; font-weight: bold'] * len(row)
+    return [''] * len(row)
+
+print("="*100)
+print("📊 PERFORMANCE METRICS SUMMARY")
+print("="*100)
+print("Best models highlighted in GREEN\n")
+
+display(df_perf.style.apply(highlight_best, axis=1).set_table_styles([
+    {'selector': 'th', 'props': [('background-color', '#4472C4'), ('color', 'white'), 
+                                  ('font-weight', 'bold'), ('text-align', 'center')]},
+    {'selector': 'td', 'props': [('text-align', 'center'), ('padding', '8px')]}
+]).format({
+    'Accuracy': '{:.2f}',
+    'R² Score': '{:.4f}',
+    'MAE': '{:.2f}',
+    'RMSE': '{:.2f}'
+}))
+
+# ============================================================================
+# FAIRNESS SUMMARY
+# ============================================================================
+
+fair_data = {
+    'Dataset': ['Student Performance', 'University Ranking', 'Enrollment', 'Dropout', 'Budget Prediction'],
+    'Best Model': ['RandomForest', 'XGBoost', 'RandomForest', 'RandomForest', 'RandomForest'],
+    'Disparity': [0.2309, 0.0004, 106705, 0.0065, 0.0008],
+    'Fairness Level': ['Moderate', 'Excellent', 'Poor', 'Excellent', 'Excellent']
+}
+
+df_fair = pd.DataFrame(fair_data)
+
+def highlight_fairness(row):
+    best_models = {
+        'Student Performance': 'RandomForest',
+        'University Ranking': 'XGBoost',
+        'Enrollment': 'RandomForest',
+        'Dropout': 'RandomForest',
+        'Budget Prediction': 'RandomForest'
+    }
+    if row['Best Model'] == best_models.get(row['Dataset'], ''):
+        return ['background-color: #90EE90; font-weight: bold'] * len(row)
+    return [''] * len(row)
+
+def color_fairness(val):
+    if val == 'Excellent':
+        return 'background-color: #90EE90'
+    elif val == 'Moderate':
+        return 'background-color: #FFE4B5'
+    elif val == 'Poor':
+        return 'background-color: #FFB6C1'
+    return ''
+
+print("\n" + "="*100)
+print("⚖️ FAIRNESS SUMMARY")
+print("="*100)
+print("Best fairness models highlighted in GREEN\n")
+
+display(df_fair.style.apply(highlight_fairness, axis=1).applymap(
+    color_fairness, subset=['Fairness Level']
+).set_table_styles([
+    {'selector': 'th', 'props': [('background-color', '#4472C4'), ('color', 'white'), 
+                                  ('font-weight', 'bold'), ('text-align', 'center')]},
+    {'selector': 'td', 'props': [('text-align', 'center'), ('padding', '8px')]}
+]).format({
+    'Disparity': lambda x: f'{x:.4f}' if x < 1 else f'{x:.0f}'
+}))
+
+# ============================================================================
+# READINESS SUMMARY
+# ============================================================================
+
+readiness_data = {
+    'Dataset': ['Student Performance', 'University Ranking', 'Enrollment', 'Dropout', 'Budget Prediction'],
+    'Best Model': ['XGBoost', 'RandomForest', 'XGBoost', 'RandomForest', 'XGBoost'],
+    'Readiness Score': [18.69, 18.80, 14.997, 18.86, 19.26],
+    'Interpretability': [4.0, 3.5, 3.0, 4.0, 4.0],
+    'Fairness': [3.0, 3.0, 1.0, 4.0, 4.0],
+    'Scalability': [4.0, 4.0, 3.0, 4.0, 4.0],
+    'Accuracy': [3.69, 4.8, 5.0, 3.86, 4.0],
+    'Data Quality': [4.0, 4.0, 2.997, 3.56, 3.26],
+    'Status': ['✅ Ready', '✅ Ready', '❌ Fix First', '✅ Ready', '✅ Ready']
+}
+
+df_read = pd.DataFrame(readiness_data)
+
+def highlight_readiness(row):
+    best_models = {
+        'Student Performance': 'XGBoost',
+        'University Ranking': 'RandomForest',
+        'Enrollment': 'XGBoost',
+        'Dropout': 'RandomForest',
+        'Budget Prediction': 'XGBoost'
+    }
+    if row['Best Model'] == best_models.get(row['Dataset'], ''):
+        return ['background-color: #90EE90; font-weight: bold'] * len(row)
+    return [''] * len(row)
+
+def color_status(val):
+    if val == '✅ Ready':
+        return 'background-color: #90EE90'
+    elif val == '❌ Fix First':
+        return 'background-color: #FFB6C1'
+    return ''
+
+print("\n" + "="*100)
+print("📈 READINESS SUMMARY")
+print("="*100)
+print("Best readiness models highlighted in GREEN\n")
+
+display(df_read.style.apply(highlight_readiness, axis=1).applymap(
+    color_status, subset=['Status']
+).set_table_styles([
+    {'selector': 'th', 'props': [('background-color', '#4472C4'), ('color', 'white'), 
+                                  ('font-weight', 'bold'), ('text-align', 'center')]},
+    {'selector': 'td', 'props': [('text-align', 'center'), ('padding', '8px')]}
+]).format({
+    'Readiness Score': '{:.2f}',
+    'Interpretability': '{:.1f}',
+    'Fairness': '{:.1f}',
+    'Scalability': '{:.1f}',
+    'Accuracy': '{:.2f}',
+    'Data Quality': '{:.2f}'
+}))
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+
+fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+datasets = ['Student\nPerformance', 'University\nRanking', 'Enrollment', 'Dropout', 'Budget\nPrediction']
+perf_scores = [98.92, 95.9, 99.7, 77.3, 0.015]
+readiness_scores = [18.69, 18.80, 14.997, 18.86, 19.26]
+
+# Performance
+ax1 = axes[0]
+colors1 = ['#90EE90' if s > 90 else '#FFE4B5' if s > 70 else '#FFB6C1' for s in perf_scores]
+bars1 = ax1.bar(datasets, perf_scores, color=colors1, edgecolor='black', linewidth=1.5)
+ax1.set_ylabel('Accuracy (%)', fontsize=12, fontweight='bold')
+ax1.set_title('Performance Metrics by Dataset', fontsize=14, fontweight='bold')
+ax1.set_ylim([0, 105])
+ax1.grid(axis='y', alpha=0.3)
+
+for i, (bar, score) in enumerate(zip(bars1, perf_scores)):
+    height = bar.get_height()
+    label = f'{score:.3f}' if i == 4 else f'{score:.2f}%'
+    ax1.text(bar.get_x() + bar.get_width()/2., height, label,
+            ha='center', va='bottom', fontweight='bold', fontsize=10)
+
+# Readiness
+ax2 = axes[1]
+colors2 = ['#90EE90' if s >= 18 else '#FFE4B5' if s >= 15 else '#FFB6C1' for s in readiness_scores]
+bars2 = ax2.bar(datasets, readiness_scores, color=colors2, edgecolor='black', linewidth=1.5)
+ax2.set_ylabel('Readiness Score (0-25)', fontsize=12, fontweight='bold')
+ax2.set_title('Readiness Scores by Dataset', fontsize=14, fontweight='bold')
+ax2.set_ylim([0, 25])
+ax2.axhline(y=18, color='green', linestyle='--', linewidth=2, label='Ready (≥18)')
+ax2.axhline(y=15, color='orange', linestyle='--', linewidth=2, label='Monitor (15-18)')
+ax2.grid(axis='y', alpha=0.3)
+ax2.legend()
+
+for bar, score in zip(bars2, readiness_scores):
+    height = bar.get_height()
+    ax2.text(bar.get_x() + bar.get_width()/2., height, f'{score:.2f}',
+            ha='center', va='bottom', fontweight='bold', fontsize=10)
+
+plt.tight_layout()
+plt.show()
+
+print("\n✅ Summary display complete!")
+
