@@ -1,209 +1,291 @@
+# -*- coding: utf-8 -*-
+
 """
-SIMPLE VERSION - Copy this entire code into a Jupyter Notebook cell
-===================================================================
+Generate Summary Tables for All Datasets
+=========================================
+Creates performance, fairness, and readiness summary tables for all 5 datasets
+with best performing models highlighted.
 """
 
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import pandas as pd
 import numpy as np
-from IPython.display import display
-import matplotlib.pyplot as plt
-import seaborn as sns
+from matplotlib.table import Table
+import os
 
-sns.set_style("whitegrid")
+try:
+    plt.style.use('seaborn-v0_8-darkgrid')
+except:
+    try:
+        plt.style.use('seaborn-darkgrid')
+    except:
+        plt.style.use('default')
 
-# ============================================================================
-# PERFORMANCE METRICS SUMMARY
-# ============================================================================
+plt.rcParams['figure.dpi'] = 300
+plt.rcParams['savefig.dpi'] = 300
+plt.rcParams['font.size'] = 10
 
-perf_data = {
-    'Dataset': ['Student Performance', 'University Ranking', 'Enrollment', 'Dropout', 'Budget Prediction'],
-    'Model': ['XGBoost', 'RandomForest', 'XGBoost', 'RandomForest', 'XGBoost'],
-    'Accuracy': [98.92, 95.9, 99.7, 77.3, 0.015],
-    'R² Score': [0.7375, 0.1538, 0.9970, 0.4932, 0.2037],
-    'MAE': [0.728, 2327411, 217559, 0.286, 2292479],
-    'RMSE': [1.927, 14307363, 348071, 0.639, 13878987]
+# Dataset results - all models for all datasets
+datasets = {
+    'Student Performance': {
+        'XGBoost': {'MAE': 0.7274, 'RMSE': 1.9263, 'R2': 0.7375, 'MAPE': 1.04, 'Accuracy': 98.92, 'Fairness': 0.4186, 'Readiness': 18.69},
+        'RandomForest': {'MAE': 1.1197, 'RMSE': 2.1954, 'R2': 0.6590, 'MAPE': 1.63, 'Accuracy': 98.34, 'Fairness': 0.2309, 'Readiness': 17.30},
+        'LightGBM': {'MAE': 0.7314, 'RMSE': 1.9028, 'R2': 0.7439, 'MAPE': 1.04, 'Accuracy': 98.91, 'Fairness': 0.4249, 'Readiness': 17.72},
+        'LogisticRegression': {'MAE': 1.1172, 'RMSE': 2.2838, 'R2': 0.6310, 'MAPE': 1.62, 'Accuracy': 98.34, 'Fairness': 0.4619, 'Readiness': 17.16}
+    },
+    'University Ranking': {
+        'XGBoost': {'MAE': 368.81, 'RMSE': 486.46, 'R2': 0.2165, 'MAPE': 35.09, 'Accuracy': 95.9, 'Fairness': 0.0004, 'Readiness': 18.79},
+        'RandomForest': {'MAE': 368.04, 'RMSE': 482.22, 'R2': 0.2301, 'MAPE': 34.76, 'Accuracy': 95.9, 'Fairness': 0.0084, 'Readiness': 18.80},
+        'LightGBM': {'MAE': 364.51, 'RMSE': 476.47, 'R2': 0.2484, 'MAPE': 35.11, 'Accuracy': 95.9, 'Fairness': 0.0044, 'Readiness': 18.79},
+        'LogisticRegression': {'MAE': 939.08, 'RMSE': 1088.19, 'R2': -2.9204, 'MAPE': 99.67, 'Accuracy': 10.7, 'Fairness': 0.0014, 'Readiness': 12.54}
+    },
+    'Enrollment': {
+        'XGBoost': {'MAE': 235251, 'RMSE': 369604, 'R2': 0.9970, 'MAPE': 4.08, 'Accuracy': 99.7, 'Fairness': 398335, 'Readiness': 14.997},
+        'RandomForest': {'MAE': 226740, 'RMSE': 420093, 'R2': 0.9961, 'MAPE': 3.04, 'Accuracy': 99.6, 'Fairness': 106705, 'Readiness': 14.996},
+        'LightGBM': {'MAE': 1975339, 'RMSE': 2389779, 'R2': 0.8734, 'MAPE': 35.67, 'Accuracy': 87.3, 'Fairness': 1584734, 'Readiness': 14.873},
+        'LogisticRegression': {'MAE': 6036301, 'RMSE': 6349858, 'R2': 0.1063, 'MAPE': 245.16, 'Accuracy': 10.6, 'Fairness': 3093992, 'Readiness': 14.106}
+    },
+    'Dropout': {
+        'XGBoost': {'MAE': 0.306, 'RMSE': 0.444, 'R2': 0.4559, 'MAPE': int(float("1.355932e+09")), 'Accuracy': 76.3, 'Fairness': 0.0271, 'Readiness': 18.81},
+        'RandomForest': {'MAE': 0.289, 'RMSE': 0.414, 'R2': 0.4932, 'MAPE': int(float("1.378531e+09")), 'Accuracy': 77.3, 'Fairness': 0.0065, 'Readiness': 18.86},
+        'LightGBM': {'MAE': 0.303, 'RMSE': 0.441, 'R2': 0.4600, 'MAPE': int(float("1.401130e+09")), 'Accuracy': 76.6, 'Fairness': 0.0068, 'Readiness': 18.83},
+        'LogisticRegression': {'MAE': 0.314, 'RMSE': 0.454, 'R2': 0.4434, 'MAPE': int(float("1.299435e+09")), 'Accuracy': 75.6, 'Fairness': 0.0087, 'Readiness': 17.78}
+    },
+    'Budget Prediction': {
+        'XGBoost': {'MAE': 0.0815, 'RMSE': 1.1606, 'R2': 0.9318, 'MAPE': 2.3151, 'Accuracy': 98.52, 'Fairness': 0.0009, 'Readiness': 19.90},
+        'RandomForest': {'MAE': 1.5031, 'RMSE': 22.0941, 'R2': 0.2156, 'MAPE': 38.8370, 'Accuracy': 77.40, 'Fairness': 0.0008, 'Readiness': 18.76},
+        'LightGBM': {'MAE': 2.2800, 'RMSE': 50.1843, 'R2': 0.6690, 'MAPE': 40.8317, 'Accuracy': 76.00, 'Fairness': 0.0015, 'Readiness': 19.20},
+        'LogisticRegression': {'MAE': 0.1042, 'RMSE': 1.3952, 'R2': 0.9140, 'MAPE': 2.8706, 'Accuracy': 97.86, 'Fairness': 0.0011, 'Readiness': 18.89}
+    }
 }
 
-df_perf = pd.DataFrame(perf_data)
+models = ['XGBoost', 'RandomForest', 'LightGBM', 'LogisticRegression']
 
-def highlight_best(row):
-    best_models = {
-        'Student Performance': 'XGBoost',
-        'University Ranking': 'RandomForest',
-        'Enrollment': 'XGBoost',
-        'Dropout': 'RandomForest',
-        'Budget Prediction': 'XGBoost'
-    }
-    if row['Model'] == best_models.get(row['Dataset'], ''):
-        return ['background-color: #90EE90; font-weight: bold'] * len(row)
-    return [''] * len(row)
+def format_number(value, metric_type):
+    """Format numbers for display in tables"""
+    if value is None:
+        return 'N/A'
+    
+    if metric_type == 'MAE':
+        if value >= 1000000:
+            return f'{value/1000000:.2f}M'
+        elif value >= 1000:
+            return f'{value/1000:.1f}K'
+        return f'{value:.4f}' if value < 1 else f'{value:.2f}'
+    
+    elif metric_type == 'RMSE':
+        if value >= 1000000:
+            return f'{value/1000000:.2f}M'
+        elif value >= 1000:
+            return f'{value/1000:.1f}K'
+        return f'{value:.4f}' if value < 1 else f'{value:.2f}'
+    
+    elif metric_type == 'R2':
+        return f'{value:.4f}'
+    
+    elif metric_type == 'MAPE':
+        if value >= 1000000:
+            return f'{value/1000000:.2f}M%'
+        return f'{value:.2f}%'
+    
+    elif metric_type == 'Accuracy':
+        if value < 1:  # Regression accuracy (very small)
+            return f'{value:.3f}'
+        return f'{value:.2f}%'
+    
+    elif metric_type == 'Fairness':
+        if value >= 1000000:
+            return f'{value/1000000:.2f}M'
+        elif value >= 1000:
+            return f'{value/1000:.1f}K'
+        return f'{value:.4f}'
+    
+    elif metric_type == 'Readiness':
+        return f'{value:.2f}'
+    
+    return str(value)
 
-print("="*100)
-print("📊 PERFORMANCE METRICS SUMMARY")
-print("="*100)
-print("Best models highlighted in GREEN\n")
+def create_performance_table(dataset_name, data, output_path):
+    """Create performance metrics table"""
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.axis('tight')
+    ax.axis('off')
+    
+    # Prepare data
+    table_data = []
+    for model in models:
+        row = [
+            model,
+            format_number(data[model]['MAE'], 'MAE'),
+            format_number(data[model]['RMSE'], 'RMSE'),
+            format_number(data[model]['R2'], 'R2'),
+            format_number(data[model]['MAPE'], 'MAPE') if data[model]['MAPE'] is not None else 'N/A',
+            format_number(data[model]['Accuracy'], 'Accuracy')
+        ]
+        table_data.append(row)
+    
+    table = ax.table(cellText=table_data,
+                     colLabels=['Model', 'MAE', 'RMSE', 'R²', 'MAPE (%)', 'Accuracy (%)'],
+                     cellLoc='center',
+                     loc='center',
+                     bbox=[0, 0, 1, 1])
+    
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1, 2.5)
+    
+    # Style header
+    for i in range(6):
+        table[(0, i)].set_facecolor('#4472C4')
+        table[(0, i)].set_text_props(weight='bold', color='white')
+    
+    # Highlight best values for each metric
+    metrics = ['MAE', 'RMSE', 'R2', 'MAPE', 'Accuracy']
+    metric_indices = [1, 2, 3, 4, 5]
+    
+    for idx, metric in zip(metric_indices, metrics):
+        if metric == 'MAPE' and dataset_name == 'Dropout':
+            continue  # Skip MAPE for Dropout (too large)
+        
+        values = []
+        for model in models:
+            val = data[model][metric]
+            if val is not None:
+                values.append(val)
+        
+        if values:
+            if metric in ['MAE', 'RMSE', 'MAPE']:
+                best_idx = np.argmin(values)
+            else:  # R2, Accuracy
+                best_idx = np.argmax(values)
+            
+            # Find which model has the best value
+            best_value = values[best_idx]
+            for model_idx, model in enumerate(models):
+                if data[model][metric] == best_value:
+                    table[(model_idx + 1, idx)].set_facecolor('#90EE90')
+                    break
+    
+    # Style model names column
+    for i in range(1, 5):
+        table[(i, 0)].set_facecolor('#E7E6E6')
+        table[(i, 0)].set_text_props(weight='bold')
+    
+    plt.title(f'Performance Metrics Summary - {dataset_name}', fontsize=16, fontweight='bold', pad=20)
+    plt.savefig(output_path, bbox_inches='tight', facecolor='white', edgecolor='none')
+    plt.close()
+    print(f'Created: {output_path}')
 
-display(df_perf.style.apply(highlight_best, axis=1).set_table_styles([
-    {'selector': 'th', 'props': [('background-color', '#4472C4'), ('color', 'white'), 
-                                  ('font-weight', 'bold'), ('text-align', 'center')]},
-    {'selector': 'td', 'props': [('text-align', 'center'), ('padding', '8px')]}
-]).format({
-    'Accuracy': '{:.2f}',
-    'R² Score': '{:.4f}',
-    'MAE': '{:.2f}',
-    'RMSE': '{:.2f}'
-}))
+def create_fairness_table(dataset_name, data, output_path):
+    """Create fairness summary table"""
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.axis('tight')
+    ax.axis('off')
+    
+    table_data = []
+    for model in models:
+        disparity = data[model]['Fairness']
+        table_data.append([model, format_number(disparity, 'Fairness')])
+    
+    table = ax.table(cellText=table_data,
+                     colLabels=['Model', 'Disparity (Lower is Better)'],
+                     cellLoc='center',
+                     loc='center',
+                     bbox=[0, 0, 1, 1])
+    
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    table.scale(1, 3)
+    
+    # Style header
+    for i in range(2):
+        table[(0, i)].set_facecolor('#4472C4')
+        table[(0, i)].set_text_props(weight='bold', color='white')
+    
+    # Highlight best (lowest disparity)
+    disparities = [data[model]['Fairness'] for model in models]
+    best_idx = np.argmin(disparities)
+    table[(best_idx + 1, 1)].set_facecolor('#90EE90')
+    
+    # Style model names column
+    for i in range(1, 5):
+        table[(i, 0)].set_facecolor('#E7E6E6')
+        table[(i, 0)].set_text_props(weight='bold')
+    
+    plt.title(f'Fairness Summary - {dataset_name}', fontsize=16, fontweight='bold', pad=20)
+    plt.savefig(output_path, bbox_inches='tight', facecolor='white', edgecolor='none')
+    plt.close()
+    print(f'Created: {output_path}')
 
-# ============================================================================
-# FAIRNESS SUMMARY
-# ============================================================================
+def create_readiness_table(dataset_name, data, output_path):
+    """Create readiness summary table"""
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.axis('tight')
+    ax.axis('off')
+    
+    table_data = []
+    for model in models:
+        readiness = data[model]['Readiness']
+        table_data.append([model, format_number(readiness, 'Readiness')])
+    
+    table = ax.table(cellText=table_data,
+                     colLabels=['Model', 'Total Readiness Score'],
+                     cellLoc='center',
+                     loc='center',
+                     bbox=[0, 0, 1, 1])
+    
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    table.scale(1, 3)
+    
+    # Style header
+    for i in range(2):
+        table[(0, i)].set_facecolor('#4472C4')
+        table[(0, i)].set_text_props(weight='bold', color='white')
+    
+    # Highlight best (highest readiness)
+    readiness_scores = [data[model]['Readiness'] for model in models]
+    best_idx = np.argmax(readiness_scores)
+    table[(best_idx + 1, 1)].set_facecolor('#90EE90')
+    
+    # Style model names column
+    for i in range(1, 5):
+        table[(i, 0)].set_facecolor('#E7E6E6')
+        table[(i, 0)].set_text_props(weight='bold')
+    
+    plt.title(f'Readiness Summary - {dataset_name}', fontsize=16, fontweight='bold', pad=20)
+    plt.savefig(output_path, bbox_inches='tight', facecolor='white', edgecolor='none')
+    plt.close()
+    print(f'Created: {output_path}')
 
-fair_data = {
-    'Dataset': ['Student Performance', 'University Ranking', 'Enrollment', 'Dropout', 'Budget Prediction'],
-    'Best Model': ['RandomForest', 'XGBoost', 'RandomForest', 'RandomForest', 'RandomForest'],
-    'Disparity': [0.2309, 0.0004, 106705, 0.0065, 0.0008],
-    'Fairness Level': ['Moderate', 'Excellent', 'Poor', 'Excellent', 'Excellent']
-}
+# Create output directory
+output_dir = 'metrics_visualizations'
+os.makedirs(output_dir, exist_ok=True)
 
-df_fair = pd.DataFrame(fair_data)
+# Generate all tables
+print("="*80)
+print("GENERATING SUMMARY TABLES FOR ALL DATASETS")
+print("="*80)
+print("\nCreating performance, fairness, and readiness tables...\n")
 
-def highlight_fairness(row):
-    best_models = {
-        'Student Performance': 'RandomForest',
-        'University Ranking': 'XGBoost',
-        'Enrollment': 'RandomForest',
-        'Dropout': 'RandomForest',
-        'Budget Prediction': 'RandomForest'
-    }
-    if row['Best Model'] == best_models.get(row['Dataset'], ''):
-        return ['background-color: #90EE90; font-weight: bold'] * len(row)
-    return [''] * len(row)
+for dataset_name, data in datasets.items():
+    filename_base = dataset_name.replace(' ', '_').lower()
+    
+    # Performance table
+    perf_path = f'{output_dir}/{filename_base}_performance_metrics.png'
+    create_performance_table(dataset_name, data, perf_path)
+    
+    # Fairness table
+    fairness_path = f'{output_dir}/{filename_base}_fairness_summary.png'
+    create_fairness_table(dataset_name, data, fairness_path)
+    
+    # Readiness table
+    readiness_path = f'{output_dir}/{filename_base}_readiness_summary.png'
+    create_readiness_table(dataset_name, data, readiness_path)
 
-def color_fairness(val):
-    if val == 'Excellent':
-        return 'background-color: #90EE90'
-    elif val == 'Moderate':
-        return 'background-color: #FFE4B5'
-    elif val == 'Poor':
-        return 'background-color: #FFB6C1'
-    return ''
-
-print("\n" + "="*100)
-print("⚖️ FAIRNESS SUMMARY")
-print("="*100)
-print("Best fairness models highlighted in GREEN\n")
-
-display(df_fair.style.apply(highlight_fairness, axis=1).applymap(
-    color_fairness, subset=['Fairness Level']
-).set_table_styles([
-    {'selector': 'th', 'props': [('background-color', '#4472C4'), ('color', 'white'), 
-                                  ('font-weight', 'bold'), ('text-align', 'center')]},
-    {'selector': 'td', 'props': [('text-align', 'center'), ('padding', '8px')]}
-]).format({
-    'Disparity': lambda x: f'{x:.4f}' if x < 1 else f'{x:.0f}'
-}))
-
-# ============================================================================
-# READINESS SUMMARY
-# ============================================================================
-
-readiness_data = {
-    'Dataset': ['Student Performance', 'University Ranking', 'Enrollment', 'Dropout', 'Budget Prediction'],
-    'Best Model': ['XGBoost', 'RandomForest', 'XGBoost', 'RandomForest', 'XGBoost'],
-    'Readiness Score': [18.69, 18.80, 14.997, 18.86, 19.26],
-    'Interpretability': [4.0, 3.5, 3.0, 4.0, 4.0],
-    'Fairness': [3.0, 3.0, 1.0, 4.0, 4.0],
-    'Scalability': [4.0, 4.0, 3.0, 4.0, 4.0],
-    'Accuracy': [3.69, 4.8, 5.0, 3.86, 4.0],
-    'Data Quality': [4.0, 4.0, 2.997, 3.56, 3.26],
-    'Status': ['✅ Ready', '✅ Ready', '❌ Fix First', '✅ Ready', '✅ Ready']
-}
-
-df_read = pd.DataFrame(readiness_data)
-
-def highlight_readiness(row):
-    best_models = {
-        'Student Performance': 'XGBoost',
-        'University Ranking': 'RandomForest',
-        'Enrollment': 'XGBoost',
-        'Dropout': 'RandomForest',
-        'Budget Prediction': 'XGBoost'
-    }
-    if row['Best Model'] == best_models.get(row['Dataset'], ''):
-        return ['background-color: #90EE90; font-weight: bold'] * len(row)
-    return [''] * len(row)
-
-def color_status(val):
-    if val == '✅ Ready':
-        return 'background-color: #90EE90'
-    elif val == '❌ Fix First':
-        return 'background-color: #FFB6C1'
-    return ''
-
-print("\n" + "="*100)
-print("📈 READINESS SUMMARY")
-print("="*100)
-print("Best readiness models highlighted in GREEN\n")
-
-display(df_read.style.apply(highlight_readiness, axis=1).applymap(
-    color_status, subset=['Status']
-).set_table_styles([
-    {'selector': 'th', 'props': [('background-color', '#4472C4'), ('color', 'white'), 
-                                  ('font-weight', 'bold'), ('text-align', 'center')]},
-    {'selector': 'td', 'props': [('text-align', 'center'), ('padding', '8px')]}
-]).format({
-    'Readiness Score': '{:.2f}',
-    'Interpretability': '{:.1f}',
-    'Fairness': '{:.1f}',
-    'Scalability': '{:.1f}',
-    'Accuracy': '{:.2f}',
-    'Data Quality': '{:.2f}'
-}))
-
-# ============================================================================
-# VISUALIZATION
-# ============================================================================
-
-fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-datasets = ['Student\nPerformance', 'University\nRanking', 'Enrollment', 'Dropout', 'Budget\nPrediction']
-perf_scores = [98.92, 95.9, 99.7, 77.3, 0.015]
-readiness_scores = [18.69, 18.80, 14.997, 18.86, 19.26]
-
-# Performance
-ax1 = axes[0]
-colors1 = ['#90EE90' if s > 90 else '#FFE4B5' if s > 70 else '#FFB6C1' for s in perf_scores]
-bars1 = ax1.bar(datasets, perf_scores, color=colors1, edgecolor='black', linewidth=1.5)
-ax1.set_ylabel('Accuracy (%)', fontsize=12, fontweight='bold')
-ax1.set_title('Performance Metrics by Dataset', fontsize=14, fontweight='bold')
-ax1.set_ylim([0, 105])
-ax1.grid(axis='y', alpha=0.3)
-
-for i, (bar, score) in enumerate(zip(bars1, perf_scores)):
-    height = bar.get_height()
-    label = f'{score:.3f}' if i == 4 else f'{score:.2f}%'
-    ax1.text(bar.get_x() + bar.get_width()/2., height, label,
-            ha='center', va='bottom', fontweight='bold', fontsize=10)
-
-# Readiness
-ax2 = axes[1]
-colors2 = ['#90EE90' if s >= 18 else '#FFE4B5' if s >= 15 else '#FFB6C1' for s in readiness_scores]
-bars2 = ax2.bar(datasets, readiness_scores, color=colors2, edgecolor='black', linewidth=1.5)
-ax2.set_ylabel('Readiness Score (0-25)', fontsize=12, fontweight='bold')
-ax2.set_title('Readiness Scores by Dataset', fontsize=14, fontweight='bold')
-ax2.set_ylim([0, 25])
-ax2.axhline(y=18, color='green', linestyle='--', linewidth=2, label='Ready (≥18)')
-ax2.axhline(y=15, color='orange', linestyle='--', linewidth=2, label='Monitor (15-18)')
-ax2.grid(axis='y', alpha=0.3)
-ax2.legend()
-
-for bar, score in zip(bars2, readiness_scores):
-    height = bar.get_height()
-    ax2.text(bar.get_x() + bar.get_width()/2., height, f'{score:.2f}',
-            ha='center', va='bottom', fontweight='bold', fontsize=10)
-
-plt.tight_layout()
-plt.show()
-
-print("\n✅ Summary display complete!")
+print(f'\n{"="*80}')
+print(f'✅ All visualizations generated in \'{output_dir}\' directory!')
+print(f'   Total: {len(datasets) * 3} images created')
+print(f'{"="*80}')
 
