@@ -1629,7 +1629,16 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
             metrics_dict = {}
             
             for result in model_results:
-                model_name = result['model_name']
+                # Handle both 'model_name' and 'Model' keys for backward compatibility
+                model_name = result.get('model_name') or result.get('Model')
+                if not model_name:
+                    continue  # Skip if no model name
+                
+                # Skip if model failed (error in result)
+                if 'error' in result or result.get('model') is None:
+                    print(f"    ⚠️ Skipping {model_name}: model training failed")
+                    continue
+                
                 models_dict[model_name] = result['model']
                 predictions_dict[model_name] = result['predictions']
                 metrics_dict[model_name] = result['metrics']
@@ -1637,7 +1646,15 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
             # Process SHAP analysis for each model
             shap_results_dict = {}
             for result in model_results:
-                model_name = result['model_name']
+                # Handle both 'model_name' and 'Model' keys
+                model_name = result.get('model_name') or result.get('Model')
+                if not model_name:
+                    continue
+                
+                # Skip if model failed
+                if 'error' in result or result.get('model') is None:
+                    continue
+                
                 model = result['model']
                 
                 # Prepare data for SHAP (handle sparse matrices)
@@ -1660,7 +1677,11 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                 }
                 
                 # Add to all_results
-                metrics = result['metrics']
+                metrics = result.get('metrics', {})
+                if not metrics:
+                    # If metrics not in separate key, use result dict (backward compatibility)
+                    metrics = {k: v for k, v in result.items() 
+                              if k not in ['model_name', 'Model', 'model', 'predictions', 'Task_Type', 'Target', 'error']}
                 metrics['Model'] = model_name
                 metrics['Target'] = target_col
                 metrics['Dataset'] = os.path.basename(dataset_path) if isinstance(dataset_path, str) else 'DataFrame'
@@ -1673,12 +1694,12 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
             failed_models = []
             for result in model_results:
                 if 'error' in result:
-                    failed_models.append(result['model_name'])
-                    print(f"    ⚠️ {result['model_name']} failed: {result['error']}")
+                    model_name = result.get('model_name') or result.get('Model', 'Unknown')
+                    failed_models.append(model_name)
+                    print(f"    ⚠️ {model_name} failed: {result['error']}")
             
             if failed_models:
-                    print(f"      ❌ Error training {model_name}: {e}")
-                    continue
+                print(f"    ⚠️ {len(failed_models)} model(s) failed: {', '.join(failed_models)}")
             
             # Display metrics table for this target
             print(f"\n    📊 Accuracy Metrics for {target_col}:")
@@ -1864,7 +1885,16 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
         
         # Extract models and predictions from results
         for result in model_results:
-            model_name = result['model_name']
+            # Handle both 'model_name' and 'Model' keys for backward compatibility
+            model_name = result.get('model_name') or result.get('Model')
+            if not model_name:
+                continue  # Skip if no model name
+            
+            # Skip if model failed (error in result)
+            if 'error' in result or result.get('model') is None:
+                print(f"    ⚠️ Skipping {model_name}: model training failed")
+                continue
+            
             models_dict[model_name] = result['model']
             predictions_dict[model_name] = result['predictions']
             metrics_dict[model_name] = result['metrics']
