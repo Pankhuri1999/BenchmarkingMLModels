@@ -644,13 +644,17 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test, task_type, targe
             
             metrics = calculate_all_metrics(y_test_eval, y_pred, task_type)
             
-            # Store results
+            # Store results with model and predictions for comprehensive pipeline
             result = {
-                'Model': model_name,
+                'model_name': model_name,  # Lowercase for consistency
+                'Model': model_name,       # Keep uppercase for backward compatibility
+                'model': model,            # Store the trained model
+                'predictions': y_pred,     # Store predictions
+                'metrics': metrics,         # Store metrics separately
                 'Task_Type': task_type,
                 'Target': target_name
             }
-            result.update(metrics)
+            result.update(metrics)  # Also add metrics at top level for backward compatibility
             results.append(result)
             
             print(f"    ✅ {model_name}: ", end="")
@@ -665,6 +669,15 @@ def train_and_evaluate_models(X_train, X_test, y_train, y_test, task_type, targe
             print(f"    ❌ Error training {model_name}: {e}")
             import traceback
             traceback.print_exc()
+            # Store error information
+            results.append({
+                'model_name': model_name,
+                'Model': model_name,
+                'error': str(e),
+                'model': None,
+                'predictions': None,
+                'metrics': {}
+            })
             continue
     
     return results
