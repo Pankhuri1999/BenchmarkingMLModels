@@ -4,6 +4,7 @@ from quickdraw import QuickDrawData
 from skimage.metrics import structural_similarity as ssim
 import time
 import random
+import mediapipe as mp
 
 # --- Simple words for drawing game ---
 SIMPLE_WORDS = [
@@ -118,18 +119,46 @@ def compare_drawings_histogram(user_img, ref_img):
     correlation = cv2.compareHist(user_hist, ref_hist, cv2.HISTCMP_CORREL)
     return max(0.0, correlation)
 
+def compare_drawings_hausdorff(user_img, ref_img):
+    """Compare using Hausdorff distance for shape matching."""
+    user_contours, _ = cv2.findContours(user_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    ref_contours, _ = cv2.findContours(ref_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if len(user_contours) == 0 or len(ref_contours) == 0:
+        return 0.0
+    
+    user_largest = max(user_contours, key=cv2.contourArea)
+    ref_largest = max(ref_contours, key=cv2.contourArea)
+    
+    # Calculate Hausdorff distance
+    match_score = cv2.matchShapes(user_largest, ref_largest, cv2.CONTOURS_MATCH_I3, 0)
+    similarity = 1.0 / (1.0 + match_score * 10)  # More strict scaling
+    return similarity
+
 def compare_drawings_combined(user_img, ref_img):
     """Combine multiple comparison methods for better accuracy."""
     ssim_score = compare_drawings_ssim(user_img, ref_img)
     contour_score = compare_drawings_contour(user_img, ref_img)
     hist_score = compare_drawings_histogram(user_img, ref_img)
+    hausdorff_score = compare_drawings_hausdorff(user_img, ref_img)
     
-    # Weighted combination
-    combined = (0.5 * ssim_score + 0.3 * contour_score + 0.2 * hist_score)
+    # More strict weighted combination - require higher scores
+    combined = (0.4 * ssim_score + 0.3 * contour_score + 0.15 * hist_score + 0.15 * hausdorff_score)
+    
+    # Require at least 2 methods to agree (be above 0.5)
+    agreement_count = sum([
+        ssim_score > 0.5,
+        contour_score > 0.5,
+        hist_score > 0.5,
+        hausdorff_score > 0.5
+    ])
+    
     return combined, {
         'ssim': ssim_score,
         'contour': contour_score,
-        'histogram': hist_score
+        'histogram': hist_score,
+        'hausdorff': hausdorff_score,
+        'agreement': agreement_count
     }
 
 def main():
@@ -148,7 +177,8 @@ def main():
         return
     
     print("\nInstructions:")
-    print("  • Draw in the air using a yellow marker")
+    print("  • Show your hand to the camera")
+    print("  • Point your index finger to draw in the air")
     print("  • Press 's' to submit your drawing")
     print("  • Press 'c' to clear canvas")
     print("  • Press 'q' to quit")
@@ -160,17 +190,23 @@ def main():
         print("Error: Could not open webcam")
         return
     
+    # Initialize MediaPipe Hands
+    mp_hands = mp.solutions.hands
+    mp_drawing = mp.solutions.drawing_utils
+    hands = mp_hands.Hands(
+        static_image_mode=False,
+        max_num_hands=1,
+        min_detection_confidence=0.7,
+        min_tracking_confidence=0.5
+    )
+    
     time.sleep(2)  # Allow camera to warm up
     
     canvas = np.ones((480, 640, 3), dtype=np.uint8) * 255
     
-    # Yellow color HSV range (adjusted for better detection)
-    lower_color = np.array([20, 100, 100])
-    upper_color = np.array([40, 255, 255])
-    
-    kernel = np.ones((5, 5), np.uint8)
     prev_center = None
     drawing_active = False
+    drawing_points = []  # Track all drawing points for area calculation
     
     while True:
         ret, frame = cap.read()
@@ -178,37 +214,46 @@ def main():
             break
         
         frame = cv2.flip(frame, 1)
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Create mask for yellow color
-        mask = cv2.inRange(hsv, lower_color, upper_color)
-        mask = cv2.erode(mask, kernel, iterations=2)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.dilate(mask, kernel, iterations=1)
+        # Process hand detection
+        results = hands.process(frame_rgb)
         
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if contours:
-            largest = max(contours, key=cv2.contourArea)
-            area = cv2.contourArea(largest)
-            
-            if area > 100:  # Minimum area threshold
-                x, y, w, h = cv2.boundingRect(largest)
-                center = (x + w // 2, y + h // 2)
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                # Draw hand landmarks (optional, for visualization)
+                mp_drawing.draw_landmarks(
+                    frame, hand_landmarks, mp_hands.HAND_CONNECTIONS,
+                    mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2),
+                    mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)
+                )
                 
-                # Draw marker position on frame
-                cv2.circle(frame, center, 10, (0, 255, 0), -1)
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                # Get index finger tip (landmark 8)
+                h, w, _ = frame.shape
+                index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+                center = (int(index_tip.x * w), int(index_tip.y * h))
                 
-                # Draw on canvas
-                if prev_center:
-                    cv2.line(canvas, prev_center, center, (0, 0, 0), 5)
-                    drawing_active = True
+                # Get index finger MCP (base) to check if finger is extended
+                index_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_MCP]
+                index_pip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_PIP]
                 
-                prev_center = center
-            else:
-                prev_center = None
+                # Check if index finger is extended (tip is above PIP joint)
+                finger_extended = index_tip.y < index_pip.y
+                
+                if finger_extended:
+                    # Draw finger tip position on frame
+                    cv2.circle(frame, center, 10, (0, 255, 0), -1)
+                    cv2.circle(frame, center, 15, (0, 255, 0), 2)
+                    
+                    # Draw on canvas
+                    if prev_center:
+                        cv2.line(canvas, prev_center, center, (0, 0, 0), 5)
+                        drawing_active = True
+                        drawing_points.append(center)
+                    
+                    prev_center = center
+                else:
+                    prev_center = None
         else:
             prev_center = None
         
@@ -233,6 +278,7 @@ def main():
             canvas[:] = 255
             drawing_active = False
             prev_center = None
+            drawing_points = []
             print("Canvas cleared!")
         elif key == ord('n'):
             # Get new random word
@@ -241,6 +287,7 @@ def main():
             canvas[:] = 255
             drawing_active = False
             prev_center = None
+            drawing_points = []
             try:
                 drawing = get_quickdraw_reference(category)
                 reference_img = render_drawing_to_image(drawing)
@@ -254,10 +301,32 @@ def main():
             return
     
     cap.release()
+    hands.close()
     cv2.destroyAllWindows()
+    
+    # Check if drawing has enough content
+    if len(drawing_points) < 10:
+        print("\n⚠️  Drawing too short! Please draw more.")
+        return
+    
+    # Calculate drawing area coverage
+    if len(drawing_points) > 0:
+        points_array = np.array(drawing_points)
+        x_range = points_array[:, 0].max() - points_array[:, 0].min()
+        y_range = points_array[:, 1].max() - points_array[:, 1].min()
+        coverage = (x_range * y_range) / (640 * 480)
+        if coverage < 0.01:  # Less than 1% of canvas
+            print("\n⚠️  Drawing too small! Please draw larger.")
+            return
     
     # Process user drawing
     user_img = preprocess_canvas(canvas)
+    
+    # Check if user drawing has enough content
+    user_pixels = np.sum(user_img == 0)
+    if user_pixels < 50:  # Too few black pixels
+        print("\n⚠️  Drawing too sparse! Please draw more clearly.")
+        return
     
     # Show comparison
     comparison = np.hstack([user_img, reference_img])
@@ -280,14 +349,23 @@ def main():
     print(f"   SSIM: {details['ssim']:.2%}")
     print(f"   Contour: {details['contour']:.2%}")
     print(f"   Histogram: {details['histogram']:.2%}")
+    print(f"   Hausdorff: {details['hausdorff']:.2%}")
+    print(f"   Methods in agreement: {details['agreement']}/4")
     print("=" * 50)
     
-    # Determine result
-    threshold = 0.4  # Adjusted threshold for style-agnostic matching
-    if score > threshold:
+    # Stricter matching criteria
+    threshold = 0.55  # Higher threshold
+    min_agreement = 2  # Require at least 2 methods to agree
+    
+    # Both conditions must be met
+    if score > threshold and details['agreement'] >= min_agreement:
         print(f"✅ Great job! Your drawing matches '{category}'!")
     else:
         print(f"❌ Not quite right. The word was '{category}'. Try again!")
+        if score <= threshold:
+            print(f"   (Score {score:.2%} below threshold {threshold:.2%})")
+        if details['agreement'] < min_agreement:
+            print(f"   (Only {details['agreement']}/4 methods agreed)")
     
     print("\nPress any key to continue or close the window...")
 
