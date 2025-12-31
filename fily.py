@@ -1301,10 +1301,18 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         n_samples = min(200, len(X_test_dense))
                         X_test_sample = X_test_dense[:n_samples]
                         
+                        # Convert to DataFrame with feature names for proper SHAP feature naming
+                        # This ensures LightGBM and other models show actual feature names instead of column_1, column_2, etc.
+                        if len(feature_names) == X_test_sample.shape[1]:
+                            X_test_sample_df = pd.DataFrame(X_test_sample, columns=feature_names)
+                        else:
+                            X_test_sample_df = pd.DataFrame(X_test_sample)
+                        
                         if model_name in ['RandomForest', 'XGBoost', 'LightGBM']:
                             # Tree-based models: use TreeExplainer
+                            # Pass DataFrame to ensure proper feature naming (especially for LightGBM)
                             explainer = shap.TreeExplainer(model)
-                            shap_values = explainer.shap_values(X_test_sample)
+                            shap_values = explainer.shap_values(X_test_sample_df)
                             
                             # Handle multi-class classification
                             if isinstance(shap_values, list):
@@ -1322,9 +1330,15 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                             background_size = min(100, len(X_train_dense))
                             background = X_train_dense[:background_size]
                             
+                            # Convert background to DataFrame with feature names
+                            if len(feature_names) == background.shape[1]:
+                                background_df = pd.DataFrame(background, columns=feature_names)
+                            else:
+                                background_df = pd.DataFrame(background)
+                            
                             try:
-                                explainer = shap.LinearExplainer(model, background)
-                                shap_values = explainer.shap_values(X_test_sample)
+                                explainer = shap.LinearExplainer(model, background_df)
+                                shap_values = explainer.shap_values(X_test_sample_df)
                                 
                                 # Handle multi-class (LinearExplainer returns list for multi-class)
                                 if isinstance(shap_values, list):
@@ -1336,7 +1350,7 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         else:
                             # Other models - try TreeExplainer as fallback
                             explainer = shap.TreeExplainer(model)
-                            shap_values = explainer.shap_values(X_test_sample)
+                            shap_values = explainer.shap_values(X_test_sample_df)
                             if isinstance(shap_values, list):
                                 shap_values = shap_values[0]
                         
@@ -1699,10 +1713,18 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     n_samples = min(200, len(X_test_dense))
                     X_test_sample = X_test_dense[:n_samples]
                     
+                    # Convert to DataFrame with feature names for proper SHAP feature naming
+                    # This ensures LightGBM and other models show actual feature names instead of column_1, column_2, etc.
+                    if len(feature_names) == X_test_sample.shape[1]:
+                        X_test_sample_df = pd.DataFrame(X_test_sample, columns=feature_names)
+                    else:
+                        X_test_sample_df = pd.DataFrame(X_test_sample)
+                    
                     if model_name in ['RandomForest', 'XGBoost', 'LightGBM']:
                         # Tree-based models: use TreeExplainer
+                        # Pass DataFrame to ensure proper feature naming (especially for LightGBM)
                         explainer = shap.TreeExplainer(model)
-                        shap_values = explainer.shap_values(X_test_sample)
+                        shap_values = explainer.shap_values(X_test_sample_df)
                         
                         # Handle multi-class classification
                         if isinstance(shap_values, list):
@@ -1720,9 +1742,15 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         background_size = min(100, len(X_train_dense))
                         background = X_train_dense[:background_size]
                         
+                        # Convert background to DataFrame with feature names
+                        if len(feature_names) == background.shape[1]:
+                            background_df = pd.DataFrame(background, columns=feature_names)
+                        else:
+                            background_df = pd.DataFrame(background)
+                        
                         try:
-                            explainer = shap.LinearExplainer(model, background)
-                            shap_values = explainer.shap_values(X_test_sample)
+                            explainer = shap.LinearExplainer(model, background_df)
+                            shap_values = explainer.shap_values(X_test_sample_df)
                             
                             # Handle multi-class (LinearExplainer returns list for multi-class)
                             if isinstance(shap_values, list):
@@ -1734,7 +1762,7 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     else:
                         # Other models - try TreeExplainer as fallback
                         explainer = shap.TreeExplainer(model)
-                        shap_values = explainer.shap_values(X_test_sample)
+                        shap_values = explainer.shap_values(X_test_sample_df)
                         if isinstance(shap_values, list):
                             shap_values = shap_values[0]
                     
