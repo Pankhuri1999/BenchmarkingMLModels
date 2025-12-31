@@ -1105,7 +1105,7 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
             # SHAP Analysis with Visualizations (with fallback to model feature importance)
             print(f"  📊 Running SHAP Analysis...")
             
-        def get_feature_importance_fallback(model, model_name, feature_names):
+            def get_feature_importance_fallback(model, model_name, feature_names):
             """Get feature importance from model itself when SHAP fails."""
             try:
                 # Try to use model's feature names if available (most accurate)
@@ -1218,34 +1218,34 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         # Calculate mean absolute SHAP values
                         mean_abs_shap = np.abs(shap_values).mean(0)
                         
-                    # Verify feature_names length matches
-                    if len(feature_names) != len(mean_abs_shap):
-                        print(f"      ⚠️ Feature names count ({len(feature_names)}) doesn't match SHAP values ({len(mean_abs_shap)})")
-                        print(f"      Using coefficient importance instead...")
-                        raise ValueError("Feature count mismatch")
-                    
-                    # Use model's feature names if available (sklearn 1.0+)
-                    if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
-                        model_feature_names = list(model.feature_names_in_)
-                        if len(model_feature_names) == len(mean_abs_shap):
-                            print(f"      ℹ️ Using model's feature names (from feature_names_in_)")
-                            feature_names_to_use = model_feature_names
+                        # Verify feature_names length matches
+                        if len(feature_names) != len(mean_abs_shap):
+                            print(f"      ⚠️ Feature names count ({len(feature_names)}) doesn't match SHAP values ({len(mean_abs_shap)})")
+                            print(f"      Using coefficient importance instead...")
+                            raise ValueError("Feature count mismatch")
+                        
+                        # Use model's feature names if available (sklearn 1.0+)
+                        if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
+                            model_feature_names = list(model.feature_names_in_)
+                            if len(model_feature_names) == len(mean_abs_shap):
+                                print(f"      ℹ️ Using model's feature names (from feature_names_in_)")
+                                feature_names_to_use = model_feature_names
+                            else:
+                                feature_names_to_use = feature_names
                         else:
                             feature_names_to_use = feature_names
-                    else:
-                        feature_names_to_use = feature_names
-                    
-                    # Verify feature_names are valid (not categorical values like 'low', 'high', 'yes')
-                    # Feature names should be column names or TF-IDF terms, not categorical values
-                    invalid_keywords = ['low', 'high', 'yes', 'no', 'true', 'false', 'medium', 'small', 'large']
-                    invalid_names = [name for name in feature_names_to_use if any(kw in str(name).lower() for kw in invalid_keywords) and len(str(name)) < 10]
-                    if invalid_names and model_name == 'LogisticRegression':
-                        print(f"      ⚠️ Detected potentially invalid feature names: {invalid_names[:5]}")
-                        print(f"      First 10 feature names: {feature_names_to_use[:10]}")
-                        # Don't raise error, just warn - might be legitimate feature names
-                    
-                    # Create feature importance dictionary
-                    importance_dict = dict(zip(feature_names_to_use, mean_abs_shap))
+                        
+                        # Verify feature_names are valid (not categorical values like 'low', 'high', 'yes')
+                        # Feature names should be column names or TF-IDF terms, not categorical values
+                        invalid_keywords = ['low', 'high', 'yes', 'no', 'true', 'false', 'medium', 'small', 'large']
+                        invalid_names = [name for name in feature_names_to_use if any(kw in str(name).lower() for kw in invalid_keywords) and len(str(name)) < 10]
+                        if invalid_names and model_name == 'LogisticRegression':
+                            print(f"      ⚠️ Detected potentially invalid feature names: {invalid_names[:5]}")
+                            print(f"      First 10 feature names: {feature_names_to_use[:10]}")
+                            # Don't raise error, just warn - might be legitimate feature names
+                        
+                        # Create feature importance dictionary
+                        importance_dict = dict(zip(feature_names_to_use, mean_abs_shap))
                         sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
                         method_used = 'SHAP'
                         shap_success = True
