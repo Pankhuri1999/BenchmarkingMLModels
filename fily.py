@@ -1061,73 +1061,139 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     print(f"    ⚠️ Error training {model_name}: {e}")
                     continue
 
-            # SHAP Analysis with Visualizations
+            # SHAP Analysis with Visualizations (with fallback to model feature importance)
             print(f"  📊 Running SHAP Analysis...")
-            try:
-                import shap
-                shap.initjs()  # Initialize JS visualization
-                
-                for model_name, model in models_dict.items():
-                    try:
-                        print(f"    Analyzing {model_name}...")
-                        explainer = shap.TreeExplainer(model)
-                        
-                        # Use more samples for better analysis (up to 200)
-                        n_samples = min(200, len(X_test))
-                        X_test_sample = X_test[:n_samples]
-                        
-                        shap_values = explainer.shap_values(X_test_sample)
-                        
-                        # Handle multi-class classification
-                        if isinstance(shap_values, list):
-                            shap_values = shap_values[0]  # Use first class for multi-class
-                        
-                        # Calculate mean absolute SHAP values
-                        mean_abs_shap = np.abs(shap_values).mean(0)
-                        
-                        # Create feature importance dictionary
-                        importance_dict = dict(zip(feature_names, mean_abs_shap))
-                        
-                        # Sort by importance
+            
+            def get_feature_importance_fallback(model, model_name, feature_names):
+                """Get feature importance from model itself when SHAP fails."""
+                try:
+                    # For tree-based models
+                    if hasattr(model, 'feature_importances_'):
+                        importances = model.feature_importances_
+                        importance_dict = dict(zip(feature_names, importances))
                         sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                        
-                        shap_results_dict[model_name] = {
-                            'success': True,
-                            'shap_values': shap_values,
-                            'importance': importance_dict,
-                            'mean_abs_shap': mean_abs_shap,
-                            'sorted_features': sorted_features
-                        }
-                        
-                        # Create visualization for top 20 features
-                        print(f"      📈 Creating SHAP visualization for {model_name}...")
+                        return importance_dict, sorted_features, 'Model_Feature_Importance'
+                    
+                    # For linear models (LogisticRegression, Ridge)
+                    elif hasattr(model, 'coef_'):
+                        coef = model.coef_
+                        # Handle multi-class (coef_ is 2D)
+                        if coef.ndim > 1:
+                            coef = np.abs(coef).mean(axis=0)  # Average across classes
+                        else:
+                            coef = np.abs(coef)
+                        importance_dict = dict(zip(feature_names, coef))
+                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                        return importance_dict, sorted_features, 'Model_Coefficient_Importance'
+                    
+                    else:
+                        return {}, [], 'No_Importance_Available'
+                except Exception as e:
+                    print(f"        ⚠️ Fallback feature importance failed: {e}")
+                    return {}, [], 'No_Importance_Available'
+            
+            for model_name, model in models_dict.items():
+                try:
+                    print(f"    Analyzing {model_name}...")
+                    shap_success = False
+                    importance_dict = {}
+                    sorted_features = []
+                    method_used = 'Unknown'
+                    
+                    # Try SHAP first (only for tree-based models)
+                    if model_name in ['RandomForest', 'XGBoost', 'LightGBM']:
+                        try:
+                            import shap
+                            
+                            # Convert sparse matrix to dense if needed
+                            if hasattr(X_test, 'toarray'):
+                                X_test_dense = X_test.toarray()
+                            else:
+                                X_test_dense = np.array(X_test)
+                            
+                            # Use more samples for better analysis (up to 200)
+                            n_samples = min(200, len(X_test_dense))
+                            X_test_sample = X_test_dense[:n_samples]
+                            
+                            explainer = shap.TreeExplainer(model)
+                            shap_values = explainer.shap_values(X_test_sample)
+                            
+                            # Handle multi-class classification
+                            if isinstance(shap_values, list):
+                                shap_values = shap_values[0]  # Use first class for multi-class
+                            
+                            # Calculate mean absolute SHAP values
+                            mean_abs_shap = np.abs(shap_values).mean(0)
+                            
+                            # Create feature importance dictionary
+                            importance_dict = dict(zip(feature_names, mean_abs_shap))
+                            sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                            method_used = 'SHAP'
+                            shap_success = True
+                            
+                        except Exception as e:
+                            print(f"      ⚠️ SHAP failed for {model_name}: {e}")
+                            print(f"      🔄 Using model's built-in feature importance instead...")
+                            importance_dict, sorted_features, method_used = get_feature_importance_fallback(
+                                model, model_name, feature_names
+                            )
+                    else:
+                        # For non-tree models, use built-in feature importance
+                        print(f"      ℹ️ {model_name} is not tree-based, using model's built-in importance...")
+                        importance_dict, sorted_features, method_used = get_feature_importance_fallback(
+                            model, model_name, feature_names
+                        )
+                    
+                    # Store results
+                    shap_results_dict[model_name] = {
+                        'success': shap_success,
+                        'importance': importance_dict,
+                        'sorted_features': sorted_features,
+                        'method': method_used
+                    }
+                    
+                    # Create visualization for top 20 features (always, even if SHAP failed)
+                    if len(sorted_features) > 0:
+                        print(f"      📈 Creating feature importance visualization for {model_name}...")
                         top_n = min(20, len(sorted_features))
                         top_features = sorted_features[:top_n]
                         
                         feature_names_plot = [f[0] for f in top_features]
-                        shap_values_plot = [f[1] for f in top_features]
+                        importance_values_plot = [f[1] for f in top_features]
                         
                         plt.figure(figsize=(10, 8))
-                        plt.barh(range(len(feature_names_plot)), shap_values_plot)
+                        colors = plt.cm.viridis(np.linspace(0, 1, len(feature_names_plot)))
+                        plt.barh(range(len(feature_names_plot)), importance_values_plot, color=colors)
                         plt.yticks(range(len(feature_names_plot)), feature_names_plot)
-                        plt.xlabel('Mean |SHAP Value|', fontsize=12)
-                        plt.title(f'Top {top_n} SHAP Feature Importance - {model_name}', fontsize=14, fontweight='bold')
+                        plt.xlabel('Feature Importance', fontsize=12)
+                        plt.title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
+                                fontsize=14, fontweight='bold')
                         plt.gca().invert_yaxis()
+                        plt.grid(axis='x', alpha=0.3)
                         plt.tight_layout()
                         plt.show()
                         
                         # Print top features
-                        print(f"      Top 10 Features for {model_name}:")
+                        print(f"      Top 10 Features for {model_name} ({method_used}):")
                         for i, (feat, val) in enumerate(top_features[:10], 1):
                             print(f"        {i:2d}. {feat:30s}: {val:.4f}")
+                    else:
+                        print(f"      ⚠️ No feature importance available for {model_name}")
+                        shap_results_dict[model_name] = {
+                            'success': False, 
+                            'importance': {}, 
+                            'sorted_features': [],
+                            'method': 'No_Importance_Available'
+                        }
                         
-                    except Exception as e:
-                        print(f"      ⚠️ SHAP analysis failed for {model_name}: {e}")
-                        shap_results_dict[model_name] = {'success': False, 'importance': {}, 'mean_abs_shap': np.array([])}
-            except ImportError:
-                print(f"    ⚠️ SHAP not available, skipping SHAP analysis")
-                for model_name in models_dict.keys():
-                    shap_results_dict[model_name] = {'success': False, 'importance': {}, 'mean_abs_shap': np.array([])}
+                except Exception as e:
+                    print(f"      ⚠️ Feature importance analysis failed for {model_name}: {e}")
+                    shap_results_dict[model_name] = {
+                        'success': False, 
+                        'importance': {}, 
+                        'sorted_features': [],
+                        'method': 'Failed'
+                    }
 
             # Fairness Analysis (without synthetic groups)
             print(f"  ⚖️ Running Fairness Analysis...")
@@ -1299,73 +1365,139 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                 print(f"    ⚠️ Error training {model_name}: {e}")
                 continue
 
-        # SHAP Analysis with Visualizations
+        # SHAP Analysis with Visualizations (with fallback to model feature importance)
         print(f"  📊 Running SHAP Analysis...")
-        try:
-            import shap
-            shap.initjs()  # Initialize JS visualization
-            
-            for model_name, model in models_dict.items():
-                try:
-                    print(f"    Analyzing {model_name}...")
-                    explainer = shap.TreeExplainer(model)
-                    
-                    # Use more samples for better analysis (up to 200)
-                    n_samples = min(200, len(X_test))
-                    X_test_sample = X_test[:n_samples]
-                    
-                    shap_values = explainer.shap_values(X_test_sample)
-                    
-                    # Handle multi-class classification
-                    if isinstance(shap_values, list):
-                        shap_values = shap_values[0]  # Use first class for multi-class
-                    
-                    # Calculate mean absolute SHAP values
-                    mean_abs_shap = np.abs(shap_values).mean(0)
-                    
-                    # Create feature importance dictionary
-                    importance_dict = dict(zip(feature_names, mean_abs_shap))
-                    
-                    # Sort by importance
+        
+        def get_feature_importance_fallback(model, model_name, feature_names):
+            """Get feature importance from model itself when SHAP fails."""
+            try:
+                # For tree-based models
+                if hasattr(model, 'feature_importances_'):
+                    importances = model.feature_importances_
+                    importance_dict = dict(zip(feature_names, importances))
                     sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                    
-                    shap_results_dict[model_name] = {
-                        'success': True,
-                        'shap_values': shap_values,
-                        'importance': importance_dict,
-                        'mean_abs_shap': mean_abs_shap,
-                        'sorted_features': sorted_features
-                    }
-                    
-                    # Create visualization for top 20 features
-                    print(f"      📈 Creating SHAP visualization for {model_name}...")
+                    return importance_dict, sorted_features, 'Model_Feature_Importance'
+                
+                # For linear models (LogisticRegression, Ridge)
+                elif hasattr(model, 'coef_'):
+                    coef = model.coef_
+                    # Handle multi-class (coef_ is 2D)
+                    if coef.ndim > 1:
+                        coef = np.abs(coef).mean(axis=0)  # Average across classes
+                    else:
+                        coef = np.abs(coef)
+                    importance_dict = dict(zip(feature_names, coef))
+                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                    return importance_dict, sorted_features, 'Model_Coefficient_Importance'
+                
+                else:
+                    return {}, [], 'No_Importance_Available'
+            except Exception as e:
+                print(f"        ⚠️ Fallback feature importance failed: {e}")
+                return {}, [], 'No_Importance_Available'
+        
+        for model_name, model in models_dict.items():
+            try:
+                print(f"    Analyzing {model_name}...")
+                shap_success = False
+                importance_dict = {}
+                sorted_features = []
+                method_used = 'Unknown'
+                
+                # Try SHAP first (only for tree-based models)
+                if model_name in ['RandomForest', 'XGBoost', 'LightGBM']:
+                    try:
+                        import shap
+                        
+                        # Convert sparse matrix to dense if needed
+                        if hasattr(X_test, 'toarray'):
+                            X_test_dense = X_test.toarray()
+                        else:
+                            X_test_dense = np.array(X_test)
+                        
+                        # Use more samples for better analysis (up to 200)
+                        n_samples = min(200, len(X_test_dense))
+                        X_test_sample = X_test_dense[:n_samples]
+                        
+                        explainer = shap.TreeExplainer(model)
+                        shap_values = explainer.shap_values(X_test_sample)
+                        
+                        # Handle multi-class classification
+                        if isinstance(shap_values, list):
+                            shap_values = shap_values[0]  # Use first class for multi-class
+                        
+                        # Calculate mean absolute SHAP values
+                        mean_abs_shap = np.abs(shap_values).mean(0)
+                        
+                        # Create feature importance dictionary
+                        importance_dict = dict(zip(feature_names, mean_abs_shap))
+                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                        method_used = 'SHAP'
+                        shap_success = True
+                        
+                    except Exception as e:
+                        print(f"      ⚠️ SHAP failed for {model_name}: {e}")
+                        print(f"      🔄 Using model's built-in feature importance instead...")
+                        importance_dict, sorted_features, method_used = get_feature_importance_fallback(
+                            model, model_name, feature_names
+                        )
+                else:
+                    # For non-tree models, use built-in feature importance
+                    print(f"      ℹ️ {model_name} is not tree-based, using model's built-in importance...")
+                    importance_dict, sorted_features, method_used = get_feature_importance_fallback(
+                        model, model_name, feature_names
+                    )
+                
+                # Store results
+                shap_results_dict[model_name] = {
+                    'success': shap_success,
+                    'importance': importance_dict,
+                    'sorted_features': sorted_features,
+                    'method': method_used
+                }
+                
+                # Create visualization for top 20 features (always, even if SHAP failed)
+                if len(sorted_features) > 0:
+                    print(f"      📈 Creating feature importance visualization for {model_name}...")
                     top_n = min(20, len(sorted_features))
                     top_features = sorted_features[:top_n]
                     
                     feature_names_plot = [f[0] for f in top_features]
-                    shap_values_plot = [f[1] for f in top_features]
+                    importance_values_plot = [f[1] for f in top_features]
                     
                     plt.figure(figsize=(10, 8))
-                    plt.barh(range(len(feature_names_plot)), shap_values_plot)
+                    colors = plt.cm.viridis(np.linspace(0, 1, len(feature_names_plot)))
+                    plt.barh(range(len(feature_names_plot)), importance_values_plot, color=colors)
                     plt.yticks(range(len(feature_names_plot)), feature_names_plot)
-                    plt.xlabel('Mean |SHAP Value|', fontsize=12)
-                    plt.title(f'Top {top_n} SHAP Feature Importance - {model_name}', fontsize=14, fontweight='bold')
+                    plt.xlabel('Feature Importance', fontsize=12)
+                    plt.title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
+                            fontsize=14, fontweight='bold')
                     plt.gca().invert_yaxis()
+                    plt.grid(axis='x', alpha=0.3)
                     plt.tight_layout()
                     plt.show()
                     
                     # Print top features
-                    print(f"      Top 10 Features for {model_name}:")
+                    print(f"      Top 10 Features for {model_name} ({method_used}):")
                     for i, (feat, val) in enumerate(top_features[:10], 1):
                         print(f"        {i:2d}. {feat:30s}: {val:.4f}")
+                else:
+                    print(f"      ⚠️ No feature importance available for {model_name}")
+                    shap_results_dict[model_name] = {
+                        'success': False, 
+                        'importance': {}, 
+                        'sorted_features': [],
+                        'method': 'No_Importance_Available'
+                    }
                     
-                except Exception as e:
-                    print(f"      ⚠️ SHAP analysis failed for {model_name}: {e}")
-                    shap_results_dict[model_name] = {'success': False, 'importance': {}, 'mean_abs_shap': np.array([])}
-        except ImportError:
-            print(f"    ⚠️ SHAP not available, skipping SHAP analysis")
-            for model_name in models_dict.keys():
-                shap_results_dict[model_name] = {'success': False, 'importance': {}, 'mean_abs_shap': np.array([])}
+            except Exception as e:
+                print(f"      ⚠️ Feature importance analysis failed for {model_name}: {e}")
+                shap_results_dict[model_name] = {
+                    'success': False, 
+                    'importance': {}, 
+                    'sorted_features': [],
+                    'method': 'Failed'
+                }
 
         # Fairness Analysis (without synthetic groups)
         print(f"  ⚖️ Running Fairness Analysis...")
