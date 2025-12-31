@@ -1354,6 +1354,16 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                             if isinstance(shap_values, list):
                                 shap_values = shap_values[0]  # Use first class for multi-class
                             
+                            # Convert to numpy array and verify it's actually SHAP values, not feature values
+                            shap_values = np.array(shap_values)
+                            # Verify shap_values are different from feature values (SHAP values should be contributions, not raw values)
+                            if shap_values.shape == X_test_sample_df.values.shape:
+                                # Check if shap_values are identical to feature values (which would be wrong)
+                                if np.allclose(np.abs(shap_values), np.abs(X_test_sample_df.values), rtol=1e-5, atol=1e-5):
+                                    print(f"      ⚠️ WARNING: SHAP values appear to be identical to feature values!")
+                                    print(f"      This suggests SHAP calculation failed. Using model feature importance instead...")
+                                    raise ValueError("SHAP values identical to feature values")
+                            
                         elif model_name == 'LogisticRegression':
                             # Linear models: use LinearExplainer (like in notebook)
                             # Need background data for LinearExplainer
@@ -1389,9 +1399,49 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                             shap_values = explainer.shap_values(X_test_sample_df)
                             if isinstance(shap_values, list):
                                 shap_values = shap_values[0]
+                            
+                            # Convert to numpy array and verify it's actually SHAP values, not feature values
+                            shap_values = np.array(shap_values)
+                            # Verify shap_values are different from feature values (SHAP values should be contributions, not raw values)
+                            if shap_values.shape == X_test_sample_df.values.shape:
+                                # Check if shap_values are identical to feature values (which would be wrong)
+                                if np.allclose(np.abs(shap_values), np.abs(X_test_sample_df.values), rtol=1e-5, atol=1e-5):
+                                    print(f"      ⚠️ WARNING: SHAP values appear to be identical to feature values!")
+                                    print(f"      This suggests SHAP calculation failed. Using model feature importance instead...")
+                                    raise ValueError("SHAP values identical to feature values")
                         
                         # Calculate mean absolute SHAP values
-                        mean_abs_shap = np.abs(shap_values).mean(0)
+                        # Ensure shap_values is a numpy array
+                        shap_values = np.array(shap_values)
+                        
+                        # Verify shap_values shape: should be (n_samples, n_features) or (n_features,) for single sample
+                        if shap_values.ndim == 1:
+                            # Single sample case - reshape to (1, n_features)
+                            if len(shap_values) != len(feature_names):
+                                print(f"      ⚠️ SHAP values shape mismatch: got {shap_values.shape}, expected ({len(feature_names)},)")
+                                raise ValueError("SHAP values shape mismatch")
+                            shap_values = shap_values.reshape(1, -1)
+                        elif shap_values.ndim == 2:
+                            # Multiple samples - check if shape is (n_samples, n_features) or (n_features, n_samples)
+                            n_samples, n_features = shap_values.shape
+                            if n_features == len(feature_names):
+                                # Correct shape: (n_samples, n_features)
+                                pass
+                            elif n_samples == len(feature_names):
+                                # Transposed: (n_features, n_samples) - need to transpose
+                                print(f"      ⚠️ SHAP values appear to be transposed: {shap_values.shape}")
+                                print(f"      Transposing to correct shape: ({n_features}, {n_samples}) -> ({n_samples}, {n_features})")
+                                shap_values = shap_values.T
+                            else:
+                                print(f"      ⚠️ SHAP values shape mismatch: got {shap_values.shape}, expected (n_samples, {len(feature_names)}) or ({len(feature_names)}, n_samples)")
+                                raise ValueError("SHAP values shape mismatch")
+                        else:
+                            print(f"      ⚠️ Unexpected SHAP values shape: {shap_values.shape}")
+                            raise ValueError("Unexpected SHAP values shape")
+                        
+                        # Calculate mean absolute SHAP values across samples (axis 0)
+                        # This gives us the average absolute SHAP value for each feature
+                        mean_abs_shap = np.abs(shap_values).mean(axis=0)
                         
                         # Verify feature_names length matches
                         if len(feature_names) != len(mean_abs_shap):
@@ -1873,6 +1923,16 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         if isinstance(shap_values, list):
                             shap_values = shap_values[0]  # Use first class for multi-class
                         
+                        # Convert to numpy array and verify it's actually SHAP values, not feature values
+                        shap_values = np.array(shap_values)
+                        # Verify shap_values are different from feature values (SHAP values should be contributions, not raw values)
+                        if shap_values.shape == X_test_sample_df.values.shape:
+                            # Check if shap_values are identical to feature values (which would be wrong)
+                            if np.allclose(np.abs(shap_values), np.abs(X_test_sample_df.values), rtol=1e-5, atol=1e-5):
+                                print(f"      ⚠️ WARNING: SHAP values appear to be identical to feature values!")
+                                print(f"      This suggests SHAP calculation failed. Using model feature importance instead...")
+                                raise ValueError("SHAP values identical to feature values")
+                        
                     elif model_name == 'LogisticRegression':
                         # Linear models: use LinearExplainer (like in notebook)
                         # Need background data for LinearExplainer
@@ -1908,9 +1968,50 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         shap_values = explainer.shap_values(X_test_sample_df)
                         if isinstance(shap_values, list):
                             shap_values = shap_values[0]
+                        
+                        # Convert to numpy array and verify it's actually SHAP values, not feature values
+                        shap_values = np.array(shap_values)
+                        # Verify shap_values are different from feature values (SHAP values should be contributions, not raw values)
+                        if shap_values.shape == X_test_sample_df.values.shape:
+                            # Check if shap_values are identical to feature values (which would be wrong)
+                            if np.allclose(np.abs(shap_values), np.abs(X_test_sample_df.values), rtol=1e-5, atol=1e-5):
+                                print(f"      ⚠️ WARNING: SHAP values appear to be identical to feature values!")
+                                print(f"      This suggests SHAP calculation failed. Using model feature importance instead...")
+                                raise ValueError("SHAP values identical to feature values")
                     
                     # Calculate mean absolute SHAP values
-                    mean_abs_shap = np.abs(shap_values).mean(0)
+                    # Ensure shap_values is a numpy array (if not already converted)
+                    if not isinstance(shap_values, np.ndarray):
+                        shap_values = np.array(shap_values)
+                    
+                    # Verify shap_values shape: should be (n_samples, n_features) or (n_features,) for single sample
+                    if shap_values.ndim == 1:
+                        # Single sample case - reshape to (1, n_features)
+                        if len(shap_values) != len(feature_names):
+                            print(f"      ⚠️ SHAP values shape mismatch: got {shap_values.shape}, expected ({len(feature_names)},)")
+                            raise ValueError("SHAP values shape mismatch")
+                        shap_values = shap_values.reshape(1, -1)
+                    elif shap_values.ndim == 2:
+                        # Multiple samples - check if shape is (n_samples, n_features) or (n_features, n_samples)
+                        n_samples, n_features = shap_values.shape
+                        if n_features == len(feature_names):
+                            # Correct shape: (n_samples, n_features)
+                            pass
+                        elif n_samples == len(feature_names):
+                            # Transposed: (n_features, n_samples) - need to transpose
+                            print(f"      ⚠️ SHAP values appear to be transposed: {shap_values.shape}")
+                            print(f"      Transposing to correct shape: ({n_features}, {n_samples}) -> ({n_samples}, {n_features})")
+                            shap_values = shap_values.T
+                        else:
+                            print(f"      ⚠️ SHAP values shape mismatch: got {shap_values.shape}, expected (n_samples, {len(feature_names)}) or ({len(feature_names)}, n_samples)")
+                            raise ValueError("SHAP values shape mismatch")
+                    else:
+                        print(f"      ⚠️ Unexpected SHAP values shape: {shap_values.shape}")
+                        raise ValueError("Unexpected SHAP values shape")
+                    
+                    # Calculate mean absolute SHAP values across samples (axis 0)
+                    # This gives us the average absolute SHAP value for each feature
+                    mean_abs_shap = np.abs(shap_values).mean(axis=0)
                     
                     # Verify feature_names length matches
                     if len(feature_names) != len(mean_abs_shap):
