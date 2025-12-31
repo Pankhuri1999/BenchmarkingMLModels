@@ -190,7 +190,22 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
         for col in categorical_cols:
             le = LabelEncoder()
             X_non_text_train[col] = le.fit_transform(X_non_text_train[col].astype(str).fillna('Unknown'))
-            X_non_text_test[col] = le.transform(X_non_text_test[col].astype(str).fillna('Unknown'))
+            # Handle unseen labels in test set
+            try:
+                X_non_text_test[col] = le.transform(X_non_text_test[col].astype(str).fillna('Unknown'))
+            except (ValueError, KeyError) as e:
+                # If test set has unseen labels, map them to a default value (most common class - index 0)
+                print(f"    ⚠️ Column '{col}' contains unseen labels in test set. Mapping to most common class...")
+                test_series = pd.Series(X_non_text_test[col].astype(str).fillna('Unknown'))
+                test_encoded = []
+                for val in test_series:
+                    val_str = str(val)
+                    if val_str in le.classes_:
+                        test_encoded.append(le.transform([val_str])[0])
+                    else:
+                        # Map unseen labels to the most common training label (index 0)
+                        test_encoded.append(0)  # Map to first class (index 0)
+                X_non_text_test[col] = np.array(test_encoded)
             le_dict[col] = le
         processors['label_encoders'] = le_dict
         # Add categorical columns to feature_names (these come FIRST in the final data)
