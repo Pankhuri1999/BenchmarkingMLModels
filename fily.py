@@ -80,8 +80,24 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
     """
     # Detect task type if auto
     if task_type == 'auto':
-        if y.dtype == 'object' or y.dtype.name == 'category':
-            detected_task_type = 'Classification'
+        # Check if target is numeric (even if stored as string)
+        y_numeric = pd.to_numeric(y, errors='coerce')
+        is_numeric = not y_numeric.isna().all() and y_numeric.notna().sum() > len(y) * 0.8
+        
+        if is_numeric:
+            # It's numeric, so it's regression
+            detected_task_type = 'Regression'
+        elif y.dtype == 'object' or y.dtype.name == 'category':
+            # Check if it's actually numeric strings (like '53069.0')
+            try:
+                y_float = y.astype(str).str.replace(',', '').astype(float)
+                if y_float.notna().sum() > len(y) * 0.8:
+                    detected_task_type = 'Regression'
+                else:
+                    detected_task_type = 'Classification'
+            except (ValueError, TypeError):
+                # Can't convert to float, so it's classification
+                detected_task_type = 'Classification'
         elif len(y.unique()) < 20 and len(y) < 1000:
             detected_task_type = 'Classification'
         else:
@@ -220,21 +236,25 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
         # Handle unseen labels in test set
         try:
             y_test = le_target.transform(y_test.astype(str))
-        except ValueError as e:
-            # If test set has unseen labels, map them to a default class or skip
-            print(f"    ⚠️ Test set contains unseen labels. Mapping to most common class...")
+        except (ValueError, KeyError) as e:
+            # If test set has unseen labels, map them to a default class
+            print(f"    ⚠️ Test set contains unseen labels. Mapping unseen labels to most common class...")
             y_test_series = pd.Series(y_test.astype(str))
-            # Map unseen labels to the most common training label
-            most_common = le_target.classes_[0]  # Use first class as default
             y_test_encoded = []
             for val in y_test_series:
-                if val in le_target.classes_:
-                    y_test_encoded.append(le_target.transform([val])[0])
+                val_str = str(val)
+                if val_str in le_target.classes_:
+                    y_test_encoded.append(le_target.transform([val_str])[0])
                 else:
-                    y_test_encoded.append(0)  # Map to first class
+                    # Map unseen labels to the most common training label (index 0)
+                    print(f"      ⚠️ Unseen label '{val_str}' mapped to class '{le_target.classes_[0]}'")
+                    y_test_encoded.append(0)  # Map to first class (index 0)
             y_test = np.array(y_test_encoded)
         processors['target_encoder'] = le_target
     else:
+        # For regression, convert to numeric if needed
+        y_train = pd.to_numeric(y_train, errors='coerce')
+        y_test = pd.to_numeric(y_test, errors='coerce')
         y_train = y_train.values
         y_test = y_test.values
     
@@ -718,7 +738,7 @@ def handle_fairness_analysis_without_synthetic_groups(
         if isinstance(y_test, pd.Series) and hasattr(y_test, 'index'):
             try:
                 demo_values = df[demographic_column].iloc[y_test.index].values
-            except:
+            except (IndexError, KeyError, AttributeError):
                 # Fallback: use position-based indexing
                 demo_values = df[demographic_column].iloc[:len(y_test)].values
         else:
@@ -930,14 +950,37 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
     
     if was_transformed:
         print(f"  ✅ Dataset transformed from wide to long format")
-        if isinstance(target_column, str):
-            if target_column == 'auto' or target_column not in df.columns:
-                possible_value_cols = ['Enrollment', 'Value', 'Count', 'Amount']
-                for col in possible_value_cols:
-                    if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
+    
+    # Auto-detect target column if needed (for both transformed and non-transformed datasets)
+    if isinstance(target_column, str):
+        if target_column == 'auto' or target_column not in df.columns:
+            print(f"  🔍 Auto-detecting target column...")
+            possible_value_cols = ['Enrollment', 'enrollment', 'Value', 'value', 'Count', 'count', 
+                                 'Amount', 'amount', 'Rank', 'rank', 'target', 'Target', 'y', 'Y']
+            for col in possible_value_cols:
+                if col in df.columns:
+                    # Check if it's numeric
+                    if pd.api.types.is_numeric_dtype(df[col]):
                         print(f"  💡 Auto-detected: Using '{col}' as target column")
                         target_column = col
                         break
+                    # Or if it's the only column with that name pattern
+                    elif col.lower() in ['enrollment', 'value', 'count', 'amount', 'rank']:
+                        print(f"  💡 Auto-detected: Using '{col}' as target column (will convert to numeric)")
+                        target_column = col
+                        break
+            
+            # If still not found, check for any numeric column
+            if target_column == 'auto' or target_column not in df.columns:
+                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                if numeric_cols:
+                    print(f"  💡 Auto-detected: Using '{numeric_cols[0]}' as target column")
+                    target_column = numeric_cols[0]
+                else:
+                    # Last resort: use the last column (often the target)
+                    if len(df.columns) > 0:
+                        print(f"  💡 Auto-detected: Using last column '{df.columns[-1]}' as target column")
+                        target_column = df.columns[-1]
 
     # Handle target columns
     if isinstance(target_column, str):
@@ -949,31 +992,98 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
     else:
         raise ValueError("target_column must be a string or list of strings")
 
-    # Check for categorical targets and correct task_type
-    if is_multi_target:
-        first_target = df[target_columns[0]]
-        is_categorical = (first_target.dtype == 'object' or
-                         first_target.dtype.name == 'category' or
-                         first_target.astype(str).str.contains('[a-zA-Z]', regex=True).any())
-        if is_categorical and task_type == 'Regression':
-            print(f"  ⚠️ Detected categorical string targets. Changing task_type to 'Multi-label'")
-            task_type = 'Multi-label'
-    else:
-        y = df[target_columns[0]]
-        is_categorical = (isinstance(y, pd.Series) and
-                         (y.dtype == 'object' or y.dtype.name == 'category' or
-                          y.astype(str).str.contains('[a-zA-Z]', regex=True).any()))
-        if is_categorical and task_type == 'Regression':
-            print(f"  ⚠️ Detected categorical string target. Changing task_type to 'Classification'")
-            task_type = 'Classification'
-
-    # Validate target columns
+    # Validate target columns BEFORE any further processing
     missing_cols = [col for col in target_columns if col not in df.columns]
     if missing_cols:
-        available_cols = ', '.join(df.columns.tolist())
-        raise ValueError(f"Target column(s) not found: {missing_cols}\n"
-                        f"Available columns: {available_cols}\n"
-                        f"Please check the column name and try again.")
+        # Try case-insensitive matching
+        df_cols_lower = {col.lower(): col for col in df.columns}
+        fixed_target_columns = []
+        for col in target_columns:
+            if col not in df.columns:
+                # Try case-insensitive match
+                col_lower = col.lower()
+                if col_lower in df_cols_lower:
+                    actual_col = df_cols_lower[col_lower]
+                    print(f"  💡 Found case-insensitive match: '{col}' -> '{actual_col}'")
+                    fixed_target_columns.append(actual_col)
+                else:
+                    # Try partial match (contains the word)
+                    matches = [c for c in df.columns if col_lower in c.lower() or c.lower() in col_lower]
+                    if matches:
+                        print(f"  💡 Found similar column names: {matches}")
+                        fixed_target_columns.append(matches[0])
+                        print(f"  💡 Using '{matches[0]}' as target column")
+                    else:
+                        fixed_target_columns.append(col)  # Keep original, will raise error
+            else:
+                fixed_target_columns.append(col)
+        
+        # Update target_columns if we found matches
+        if fixed_target_columns != target_columns:
+            target_columns = fixed_target_columns
+            missing_cols = [col for col in target_columns if col not in df.columns]
+        
+        # If still missing, raise error with helpful message
+        if missing_cols:
+            available_cols = ', '.join(df.columns.tolist()[:30])  # Show first 30 columns
+            if len(df.columns) > 30:
+                available_cols += f", ... (and {len(df.columns) - 30} more)"
+            
+            # Check for common variations
+            suggestions = []
+            for missing_col in missing_cols:
+                if 'enrollment' in missing_col.lower():
+                    suggestions.append("Try: 'enrollment', 'Enrollment', 'total_enrollment', 'Total_Enrollment'")
+                elif 'rank' in missing_col.lower():
+                    suggestions.append("Try: 'rank', 'Rank', 'ranking', 'Ranking'")
+            
+            error_msg = f"Target column(s) not found: {missing_cols}\n"
+            error_msg += f"Available columns: {available_cols}\n"
+            if suggestions:
+                error_msg += f"Suggestions: {'; '.join(suggestions)}\n"
+            error_msg += f"Dataset shape: {df.shape[0]} rows × {df.shape[1]} columns\n"
+            error_msg += f"Please check the column name and try again."
+            
+            raise ValueError(error_msg)
+
+    # Check for categorical targets and correct task_type
+    # First, check if target is actually numeric (even if stored as string)
+    if is_multi_target:
+        first_target = df[target_columns[0]]
+        # Try to convert to numeric
+        first_target_numeric = pd.to_numeric(first_target, errors='coerce')
+        is_numeric = not first_target_numeric.isna().all() and first_target_numeric.notna().sum() > len(first_target) * 0.8
+        
+        if not is_numeric:
+            is_categorical = (first_target.dtype == 'object' or
+                             first_target.dtype.name == 'category' or
+                             first_target.astype(str).str.contains('[a-zA-Z]', regex=True).any())
+            if is_categorical and task_type == 'Regression':
+                print(f"  ⚠️ Detected categorical string targets. Changing task_type to 'Multi-label'")
+                task_type = 'Multi-label'
+        else:
+            # It's numeric, ensure it's regression
+            if task_type == 'auto':
+                task_type = 'Regression'
+                print(f"  ℹ️ Target '{target_columns[0]}' is numeric. Using Regression task type.")
+    else:
+        y = df[target_columns[0]]
+        # Try to convert to numeric
+        y_numeric = pd.to_numeric(y, errors='coerce')
+        is_numeric = not y_numeric.isna().all() and y_numeric.notna().sum() > len(y) * 0.8
+        
+        if not is_numeric:
+            is_categorical = (isinstance(y, pd.Series) and
+                             (y.dtype == 'object' or y.dtype.name == 'category' or
+                              y.astype(str).str.contains('[a-zA-Z]', regex=True).any()))
+            if is_categorical and task_type == 'Regression':
+                print(f"  ⚠️ Detected categorical string target. Changing task_type to 'Classification'")
+                task_type = 'Classification'
+        else:
+            # It's numeric, ensure it's regression
+            if task_type == 'auto':
+                task_type = 'Regression'
+                print(f"  ℹ️ Target '{target_columns[0]}' is numeric. Using Regression task type.")
 
     # Extract features
     if feature_columns is None:
@@ -1305,7 +1415,7 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                             # Try alternative display method
                             try:
                                 plt.show()
-                            except:
+                            except Exception:
                                 pass
                         
                         # Print top features
@@ -1686,15 +1796,9 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                             ax.set_title(f'Top {top_n} SHAP Features - {model_name}', 
                                     fontsize=14, fontweight='bold')
                         else:
-                            # Set labels based on method - match the example format
-                            if method_used == 'SHAP':
-                                ax.set_xlabel('Mean |SHAP Value|', fontsize=12)
-                                ax.set_title(f'Top {top_n} SHAP Features - {model_name}', 
-                                        fontsize=14, fontweight='bold')
-                            else:
-                                ax.set_xlabel('Feature Importance', fontsize=12)
-                                ax.set_title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
-                                        fontsize=14, fontweight='bold')
+                            ax.set_xlabel('Feature Importance', fontsize=12)
+                            ax.set_title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
+                                    fontsize=14, fontweight='bold')
                         
                         ax.invert_yaxis()
                         ax.grid(axis='x', alpha=0.3)
@@ -1711,7 +1815,7 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         # Try alternative display method
                         try:
                             plt.show()
-                        except:
+                        except Exception:
                             pass
                     
                     # Print top features
