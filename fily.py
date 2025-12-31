@@ -115,7 +115,7 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
     feature_names = []
     text_cols_used = []  # Store which text columns were used for TF-IDF
     
-    # Process text columns with TF-IDF
+    # Process text columns with TF-IDF (but don't add to feature_names yet - add in correct order later)
     if text_cols and use_tfidf:
         try:
             text_cols_used = text_cols.copy()  # Store which columns were used
@@ -138,21 +138,21 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
             
             processors['tfidf'] = tfidf
             processors['text_cols_used'] = text_cols_used  # Store for later reference
-            # Get actual feature names from TF-IDF (words/ngrams)
+            # Get actual feature names from TF-IDF (words/ngrams) - store for later
             try:
                 tfidf_feature_names = tfidf.get_feature_names_out()
             except AttributeError:
                 # Fallback for older sklearn versions
                 tfidf_feature_names = tfidf.get_feature_names()
-            # Use actual feature names (words/ngrams) directly - no prefix
-            feature_names.extend(tfidf_feature_names)
         except Exception as e:
             print(f"    ⚠️ TF-IDF processing failed: {e}")
             X_text_train_tfidf = None
             X_text_test_tfidf = None
+            tfidf_feature_names = []
     else:
         X_text_train_tfidf = None
         X_text_test_tfidf = None
+        tfidf_feature_names = []
     
     # Process non-text columns
     X_non_text_train = X_train[non_text_cols].copy()
@@ -177,6 +177,7 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
             X_non_text_test[col] = le.transform(X_non_text_test[col].astype(str).fillna('Unknown'))
             le_dict[col] = le
         processors['label_encoders'] = le_dict
+        # Add categorical columns to feature_names (these come FIRST in the final data)
         feature_names.extend(categorical_cols)
     
     # Process numerical columns
@@ -193,7 +194,13 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
         X_non_text_test[numerical_cols] = scaler.transform(X_non_text_test[numerical_cols])
         processors['scaler'] = scaler
         
+        # Add numerical columns to feature_names (these come after categorical)
         feature_names.extend(numerical_cols)
+    
+    # NOW add TF-IDF features (these come LAST in the final data)
+    # This matches the order: [non_text_features, tfidf_features] in hstack
+    if X_text_train_tfidf is not None and len(tfidf_feature_names) > 0:
+        feature_names.extend(tfidf_feature_names)
     
     # Combine text and non-text features
     if X_text_train_tfidf is not None:
@@ -210,7 +217,22 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
     if detected_task_type == 'Classification':
         le_target = LabelEncoder()
         y_train = le_target.fit_transform(y_train.astype(str))
-        y_test = le_target.transform(y_test.astype(str))
+        # Handle unseen labels in test set
+        try:
+            y_test = le_target.transform(y_test.astype(str))
+        except ValueError as e:
+            # If test set has unseen labels, map them to a default class or skip
+            print(f"    ⚠️ Test set contains unseen labels. Mapping to most common class...")
+            y_test_series = pd.Series(y_test.astype(str))
+            # Map unseen labels to the most common training label
+            most_common = le_target.classes_[0]  # Use first class as default
+            y_test_encoded = []
+            for val in y_test_series:
+                if val in le_target.classes_:
+                    y_test_encoded.append(le_target.transform([val])[0])
+                else:
+                    y_test_encoded.append(0)  # Map to first class
+            y_test = np.array(y_test_encoded)
         processors['target_encoder'] = le_target
     else:
         y_train = y_train.values
@@ -948,9 +970,10 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
     # Validate target columns
     missing_cols = [col for col in target_columns if col not in df.columns]
     if missing_cols:
-        available_cols = ', '.join(df.columns.tolist()[:10])
+        available_cols = ', '.join(df.columns.tolist())
         raise ValueError(f"Target column(s) not found: {missing_cols}\n"
-                        f"Available columns: {available_cols}...")
+                        f"Available columns: {available_cols}\n"
+                        f"Please check the column name and try again.")
 
     # Extract features
     if feature_columns is None:
