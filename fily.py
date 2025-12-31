@@ -106,10 +106,12 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
     
     processors = {}
     feature_names = []
+    text_cols_used = []  # Store which text columns were used for TF-IDF
     
     # Process text columns with TF-IDF
     if text_cols and use_tfidf:
         try:
+            text_cols_used = text_cols.copy()  # Store which columns were used
             X_text_train = X_train[text_cols].fillna('').astype(str)
             X_text_test = X_test[text_cols].fillna('').astype(str)
             
@@ -128,7 +130,21 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
             X_text_test_tfidf = tfidf.transform(X_text_test_combined)
             
             processors['tfidf'] = tfidf
-            feature_names.extend([f'tfidf_{i}' for i in range(X_text_train_tfidf.shape[1])])
+            processors['text_cols_used'] = text_cols_used  # Store for later reference
+            # Get actual feature names from TF-IDF (words/ngrams)
+            try:
+                tfidf_feature_names = tfidf.get_feature_names_out()
+            except AttributeError:
+                # Fallback for older sklearn versions
+                tfidf_feature_names = tfidf.get_feature_names()
+            # Use actual feature names (words/ngrams) instead of tfidf_0, tfidf_1, etc.
+            # Only add prefix if multiple text columns, otherwise use names directly
+            if len(text_cols) == 1:
+                # Single text column - use feature names directly
+                feature_names.extend(tfidf_feature_names)
+            else:
+                # Multiple text columns - add a simple prefix
+                feature_names.extend([f'TFIDF_{name}' for name in tfidf_feature_names])
         except Exception as e:
             print(f"    ⚠️ TF-IDF processing failed: {e}")
             X_text_train_tfidf = None
@@ -779,7 +795,17 @@ def compute_dataset_readiness_score(
     else:
         scalability = {'score': 2.5, 'training_time': 0, 'inference_time': 0, 'details': {}, 'sub_weights_used': {}}
     
-    # Default weights
+    # Calculate total readiness score as SUM (0-25), not weighted average
+    # Each dimension is 0-5, so sum is 0-25
+    readiness_score = (
+        data_quality['score'] +
+        accuracy['score'] +
+        interpretability['score'] +
+        fairness['score'] +
+        scalability['score']
+    )
+    
+    # Store weights for reference (but not used in calculation)
     if weights is None:
         weights = {
             'data_quality': 0.20, 'accuracy': 0.20, 'interpretability': 0.20,
@@ -789,15 +815,6 @@ def compute_dataset_readiness_score(
         total = sum(weights.values())
         if total > 0:
             weights = {k: v/total for k, v in weights.items()}
-    
-    # Calculate total readiness score
-    readiness_score = (
-        weights['data_quality'] * data_quality['score'] +
-        weights['accuracy'] * accuracy['score'] +
-        weights['interpretability'] * interpretability['score'] +
-        weights['fairness'] * fairness['score'] +
-        weights['scalability'] * scalability['score']
-    )
     
     return {
         'readiness_score': round(readiness_score, 2),
@@ -1634,7 +1651,7 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
         print(f"  Interpretability:   {dataset_readiness['breakdown']['interpretability']:.2f}/5.0")
         print(f"  Fairness:          {dataset_readiness['breakdown']['fairness']:.2f}/5.0")
         print(f"  Scalability:       {dataset_readiness['breakdown']['scalability']:.2f}/5.0")
-        print(f"\n  Total Readiness Score: {dataset_readiness['readiness_score']:.2f}/25.0")
+        print(f"\n  Overall Score: {dataset_readiness['readiness_score']:.2f}/25.0")
         
         # Display scalability details (without memory)
         scale_sub_weights = dataset_readiness['scalability'].get('sub_weights_used', {})
