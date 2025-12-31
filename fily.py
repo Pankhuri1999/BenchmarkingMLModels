@@ -209,7 +209,10 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
             le_dict[col] = le
         processors['label_encoders'] = le_dict
         # Add categorical columns to feature_names (these come FIRST in the final data)
-        feature_names.extend(categorical_cols)
+        # IMPORTANT: Only add column names, never data values
+        for col in categorical_cols:
+            if col not in feature_names:  # Avoid duplicates
+                feature_names.append(str(col))  # Ensure it's a string (column name)
     
     # Process numerical columns
     if numerical_cols:
@@ -226,7 +229,10 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
         processors['scaler'] = scaler
         
         # Add numerical columns to feature_names (these come after categorical)
-        feature_names.extend(numerical_cols)
+        # IMPORTANT: Only add column names, never data values
+        for col in numerical_cols:
+            if col not in feature_names:  # Avoid duplicates
+                feature_names.append(str(col))  # Ensure it's a string (column name)
     
     # NOW add TF-IDF features (these come LAST in the final data)
     # This matches the order: [non_text_features, tfidf_features] in hstack
@@ -1478,19 +1484,34 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                             feature_names_to_use = feature_names
                         
                         # Aggregate related features (e.g., enrollment across years, year-based features)
+                        # IMPORTANT: Only use column names (feature names), NEVER use data values
                         # Group features that match patterns like "Enrollment_*", "*_2016", "*_2017", etc.
                         aggregated_importance = {}
                         feature_groups = {}
                         
                         # Find feature groups (e.g., all enrollment-related, all year-based)
+                        # Only iterate over feature names (column names), not data values
                         for i, feat_name in enumerate(feature_names_to_use):
-                            feat_str = str(feat_name).strip()
+                            # Ensure we're using the feature name (column name), not a data value
+                            # Feature names should be strings representing column names
+                            if not isinstance(feat_name, str):
+                                feat_str = str(feat_name).strip()
+                            else:
+                                feat_str = feat_name.strip()
+                            
+                            # Skip if this looks like a data value (very long number or not a valid column name pattern)
+                            # Column names are typically short strings, not large numbers
+                            if feat_str.isdigit() and len(feat_str) > 6:
+                                # This is likely a data value, not a column name - skip it
+                                print(f"      ⚠️ Skipping feature '{feat_str}' - appears to be a data value, not a column name")
+                                continue
                             
                             # Check if feature is a pure year value (4 digits, 1900-2100 range)
+                            # This is for column names like "2003", "2004", etc. (which are valid column names)
                             if feat_str.isdigit() and len(feat_str) == 4:
                                 year_val = int(feat_str)
                                 if 1900 <= year_val <= 2100:
-                                    # This is a year value, aggregate into "Year"
+                                    # This is a year column name, aggregate into "Year"
                                     base_name = 'Year'
                                     if base_name not in feature_groups:
                                         feature_groups[base_name] = []
@@ -2048,19 +2069,34 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         feature_names_to_use = feature_names
                     
                     # Aggregate related features (e.g., enrollment across years, year-based features)
+                    # IMPORTANT: Only use column names (feature names), NEVER use data values
                     # Group features that match patterns like "Enrollment_*", "*_2016", "*_2017", etc.
                     aggregated_importance = {}
                     feature_groups = {}
                     
                     # Find feature groups (e.g., all enrollment-related, all year-based)
+                    # Only iterate over feature names (column names), not data values
                     for i, feat_name in enumerate(feature_names_to_use):
-                        feat_str = str(feat_name).strip()
+                        # Ensure we're using the feature name (column name), not a data value
+                        # Feature names should be strings representing column names
+                        if not isinstance(feat_name, str):
+                            feat_str = str(feat_name).strip()
+                        else:
+                            feat_str = feat_name.strip()
+                        
+                        # Skip if this looks like a data value (very long number or not a valid column name pattern)
+                        # Column names are typically short strings, not large numbers
+                        if feat_str.isdigit() and len(feat_str) > 6:
+                            # This is likely a data value, not a column name - skip it
+                            print(f"      ⚠️ Skipping feature '{feat_str}' - appears to be a data value, not a column name")
+                            continue
                         
                         # Check if feature is a pure year value (4 digits, 1900-2100 range)
+                        # This is for column names like "2003", "2004", etc. (which are valid column names)
                         if feat_str.isdigit() and len(feat_str) == 4:
                             year_val = int(feat_str)
                             if 1900 <= year_val <= 2100:
-                                # This is a year value, aggregate into "Year"
+                                # This is a year column name, aggregate into "Year"
                                 base_name = 'Year'
                                 if base_name not in feature_groups:
                                     feature_groups[base_name] = []
