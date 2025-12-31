@@ -1,0 +1,944 @@
+"""
+GENERIC ACCURACY CALCULATOR WITH HYPERPARAMETER TUNING
+======================================================
+A universal function that calculates all accuracy metrics for all models
+on any dataset with a target variable.
+
+Features:
+- Auto-detects task type (Regression vs Classification)
+- Handles preprocessing automatically
+- Works with any dataset structure
+- Calculates all accuracy types
+- Supports all 4 models: LogisticRegression, RandomForest, XGBoost, LightGBM
+- **NEW: Hyperparameter tuning using RandomizedSearchCV**
+
+USAGE:
+------
+from GENERIC_ACCURACY_CALCULATOR_WITH_HYPERPARAMETER_TUNING import calculate_accuracies_for_dataset
+
+results = calculate_accuracies_for_dataset(
+    dataset_path='your_data.csv',
+    target_column='target_variable',
+    task_type='auto'
+)
+"""
+
+import pandas as pd
+import numpy as np
+import os
+import warnings
+from sklearn.model_selection import train_test_split, RandomizedSearchCV, GridSearchCV
+from sklearn.preprocessing import LabelEncoder, StandardScaler, MinMaxScaler
+from sklearn.impute import SimpleImputer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.metrics import (
+    accuracy_score, f1_score, mean_absolute_error, mean_squared_error,
+    r2_score, mean_absolute_percentage_error, classification_report
+)
+from scipy.sparse import hstack, csr_matrix
+import xgboost as xgb
+import lightgbm as lgb
+
+warnings.filterwarnings('ignore')
+
+
+def detect_task_type(y):
+    """
+    Automatically detect if the task is regression or classification.
+
+    Args:
+        y: Target variable (pandas Series or numpy array)
+
+    Returns:
+        str: 'Regression' or 'Classification'
+    """
+    # Check if target is string/object type - definitely classification
+    if isinstance(y, pd.Series):
+        if y.dtype == 'object' or y.dtype.name == 'category':
+            return 'Classification'
+        # Check if values are strings
+        if y.astype(str).str.contains('[a-zA-Z]', regex=True).any():
+            return 'Classification'
+
+    # Convert to numeric if possible
+    try:
+        y_numeric = pd.to_numeric(y, errors='coerce')
+        unique_values = y_numeric.dropna().nunique()
+        total_values = len(y_numeric.dropna())
+
+        # If most values couldn't be converted to numeric -> Classification
+        if total_values < len(y) * 0.5:
+            return 'Classification'
+
+        # If mostly numeric and many unique values -> Regression
+        if unique_values > 10 and (unique_values / total_values) > 0.1:
+            return 'Regression'
+        # If few unique values -> Classification
+        elif unique_values <= 10:
+            return 'Classification'
+        else:
+            # Check data type
+            if y.dtype in ['int64', 'float64']:
+                return 'Regression'
+            else:
+                return 'Classification'
+    except:
+        return 'Classification'
+
+
+def detect_and_transform_wide_format(df, id_columns=None):
+    """
+    Detect and transform wide-format datasets (e.g., years as columns) to long format.
+    Has special handling for enrollment-like datasets (Type column + year columns).
+
+    Args:
+        df: Input dataframe
+        id_columns: List of columns to use as ID variables (if None, auto-detect)
+
+    Returns:
+        Transformed dataframe, or original if not wide format
+        bool: Whether transformation was applied
+    """
+    # SPECIAL CASE: Enrollment-like dataset (Type column + year columns as digits)
+    has_type_col = 'Type' in df.columns
+    year_cols = [col for col in df.columns if str(col).isdigit()]
+
+    if has_type_col and len(year_cols) >= 3:
+        print(f"  🔄 Detected enrollment-like dataset (Type column + year columns)")
+        print(f"     Found 'Type' column and {len(year_cols)} year columns")
+
+        df_long = df.melt(
+            id_vars=['Type'],
+            value_vars=year_cols,
+            var_name='Year',
+            value_name='Enrollment'
+        )
+
+        df_long = df_long.dropna(subset=['Enrollment'])
+        df_long['Year'] = df_long['Year'].astype(int)
+        df_long['Enrollment'] = pd.to_numeric(df_long['Enrollment'], errors='coerce')
+        df_long = df_long.dropna(subset=['Enrollment'])
+
+        print(f"     ✅ Transformed (enrollment pattern): {df.shape[0]} rows × {df.shape[1]} cols → "
+              f"{df_long.shape[0]} rows × {df_long.shape[1]} cols")
+        print(f"     ✅ Created columns: Type, Year, Enrollment")
+
+        return df_long, True
+
+    # GENERAL CASE: Other wide-format datasets
+    year_cols_detected = [col for col in df.columns if str(col).isdigit() and 1900 <= int(col) <= 2100]
+    numeric_cols = [col for col in df.columns if str(col).replace('.', '').isdigit()]
+
+    if len(year_cols_detected) >= 3 or (len(numeric_cols) >= 5 and len(numeric_cols) / len(df.columns) > 0.5):
+        print(f"  🔄 Detected wide-format dataset (time periods as columns)")
+        print(f"     Found {len(year_cols_detected)} year columns or {len(numeric_cols)} numeric columns")
+
+        if id_columns is None:
+            id_cols = [col for col in df.columns
+                      if col not in year_cols_detected and col not in numeric_cols
+                      and not str(col).replace('.', '').isdigit()]
+            if not id_cols:
+                id_cols = [df.columns[0]]
+        else:
+            id_cols = [col for col in id_columns if col in df.columns]
+
+        value_cols = year_cols_detected if year_cols_detected else numeric_cols
+
+        if value_cols:
+            print(f"     Using ID columns: {id_cols}")
+            print(f"     Melting {len(value_cols)} time period columns")
+
+            df_long = df.melt(
+                id_vars=id_cols,
+                value_vars=value_cols,
+                var_name='Time_Period',
+                value_name='Value'
+            )
+
+            df_long['Time_Period'] = pd.to_numeric(df_long['Time_Period'], errors='coerce')
+            df_long = df_long.dropna(subset=['Value'])
+            df_long['Value'] = pd.to_numeric(df_long['Value'], errors='coerce')
+            df_long = df_long.dropna(subset=['Value'])
+
+            print(f"     ✅ Transformed: {df.shape[0]} rows × {df.shape[1]} cols → "
+                  f"{df_long.shape[0]} rows × {df_long.shape[1]} cols")
+
+            return df_long, True
+
+    return df, False
+
+
+def detect_text_columns(X, min_unique_ratio=0.5, min_avg_length=10):
+    """
+    Detect text columns that should use TF-IDF vectorization.
+
+    Args:
+        X: Feature dataframe
+        min_unique_ratio: Minimum ratio of unique values to consider as text
+        min_avg_length: Minimum average string length to consider as text
+
+    Returns:
+        list: Column names that should be treated as text
+    """
+    text_cols = []
+    for col in X.select_dtypes(include=['object']).columns:
+        sample_values = X[col].dropna().astype(str).head(100)
+        if len(sample_values) > 0:
+            avg_length = sample_values.str.len().mean()
+            unique_ratio = sample_values.nunique() / len(sample_values)
+
+            if avg_length >= min_avg_length and unique_ratio >= min_unique_ratio:
+                text_cols.append(col)
+
+    return text_cols
+
+
+def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=10000):
+    """
+    Automatically preprocess features and target with support for:
+    - Text features (TF-IDF vectorization)
+    - Multi-target scenarios
+    - Mixed feature types
+
+    Args:
+        X: Feature dataframe
+        y: Target series or dataframe (for multi-target)
+        task_type: 'auto', 'Regression', 'Classification', or 'Multi-label'
+        use_tfidf: Whether to use TF-IDF for text columns
+        max_tfidf_features: Maximum features for TF-IDF
+
+    Returns:
+        Preprocessed X_train, X_test, y_train, y_test, feature_names, processors, task_type
+    """
+    is_multi_target = isinstance(y, pd.DataFrame) and y.shape[1] > 1
+
+    if task_type == 'auto':
+        if is_multi_target:
+            task_type = 'Multi-label'
+        else:
+            task_type = detect_task_type(y.iloc[:, 0] if is_multi_target else y)
+
+    if is_multi_target:
+        first_target = y.iloc[:, 0] if isinstance(y, pd.DataFrame) else y
+        if isinstance(first_target, pd.Series):
+            is_string_target = (first_target.dtype == 'object' or
+                              first_target.dtype.name == 'category' or
+                              first_target.astype(str).str.contains('[a-zA-Z]', regex=True).any())
+            if is_string_target and task_type == 'Regression':
+                print(f"  ⚠️ Warning: Targets are categorical strings but task_type='Regression'. Switching to 'Multi-label'")
+                task_type = 'Multi-label'
+    else:
+        if isinstance(y, pd.Series):
+            is_string_target = (y.dtype == 'object' or
+                              y.dtype.name == 'category' or
+                              y.astype(str).str.contains('[a-zA-Z]', regex=True).any())
+            if is_string_target and task_type == 'Regression':
+                print(f"  ⚠️ Warning: Targets are categorical strings but task_type='Regression'. Switching to 'Classification'")
+                task_type = 'Classification'
+
+    if is_multi_target:
+        mask = ~y.isna().any(axis=1)
+    else:
+        mask = ~y.isna()
+
+    X = X[mask].copy()
+    y = y[mask].copy()
+
+    is_enrollment_like = 'Type' in X.columns and 'Year' in X.columns
+
+    text_cols = []
+    if use_tfidf:
+        text_cols = detect_text_columns(X)
+        if is_enrollment_like and 'Type' in text_cols:
+            text_cols.remove('Type')
+            print(f"  📝 Enrollment-like dataset detected: 'Type' will be label-encoded, not TF-IDF")
+        if text_cols:
+            print(f"  📝 Detected {len(text_cols)} text columns for TF-IDF: {text_cols[:5]}...")
+
+    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    categorical_cols = [col for col in X.select_dtypes(include=['object', 'category']).columns
+                        if col not in text_cols]
+
+    if is_enrollment_like and 'Type' in X.columns and 'Type' not in categorical_cols:
+        categorical_cols.append('Type')
+
+    tfidf_vectorizer = None
+    X_text_sparse = None
+
+    if text_cols and use_tfidf:
+        X_text = X[text_cols].fillna('').agg(' '.join, axis=1)
+        tfidf_vectorizer = TfidfVectorizer(
+            max_features=max_tfidf_features,
+            ngram_range=(1, 2),
+            stop_words='english',
+            min_df=2
+        )
+        X_text_sparse = tfidf_vectorizer.fit_transform(X_text)
+        print(f"  ✅ TF-IDF: {X_text_sparse.shape[1]} features from {len(text_cols)} text columns")
+
+    X_numeric = X[numeric_cols].copy() if numeric_cols else pd.DataFrame()
+
+    label_encoders = {}
+    if categorical_cols:
+        for col in categorical_cols:
+            le = LabelEncoder()
+            X[col] = le.fit_transform(X[col].astype(str))
+            label_encoders[col] = le
+        X_categorical = X[categorical_cols].copy()
+    else:
+        X_categorical = pd.DataFrame()
+
+    X_non_text = pd.concat([X_numeric, X_categorical], axis=1)
+
+    imputer = None
+    if not X_non_text.empty:
+        imputer = SimpleImputer(strategy='mean')
+        X_non_text_imputed = imputer.fit_transform(X_non_text)
+        scaler = StandardScaler()
+        X_non_text_scaled = scaler.fit_transform(X_non_text_imputed)
+    else:
+        X_non_text_scaled = np.array([]).reshape(len(X), 0)
+        scaler = None
+
+    if X_text_sparse is not None and X_non_text_scaled.size > 0:
+        if not isinstance(X_non_text_scaled, csr_matrix):
+            X_non_text_scaled = csr_matrix(X_non_text_scaled)
+        X_combined = hstack([X_text_sparse, X_non_text_scaled])
+    elif X_text_sparse is not None:
+        X_combined = X_text_sparse
+    elif X_non_text_scaled.size > 0:
+        X_combined = X_non_text_scaled
+    else:
+        raise ValueError("No features available after preprocessing")
+
+    target_encoders = {}
+    if is_multi_target:
+        y_encoded = pd.DataFrame(index=y.index)
+        for col in y.columns:
+            target_col = y[col]
+            needs_encoding = (task_type == 'Multi-label' or task_type == 'Classification' or
+                            target_col.dtype == 'object' or target_col.dtype.name == 'category' or
+                            target_col.astype(str).str.contains('[a-zA-Z]', regex=True).any())
+
+            if needs_encoding:
+                le = LabelEncoder()
+                y_encoded[col] = le.fit_transform(target_col.astype(str))
+                target_encoders[col] = le
+            else:
+                y_encoded[col] = target_col
+        y = y_encoded
+    else:
+        needs_encoding = (task_type == 'Classification' or task_type == 'Multi-label' or
+                         (isinstance(y, pd.Series) and (y.dtype == 'object' or y.dtype.name == 'category')) or
+                         (isinstance(y, pd.Series) and y.astype(str).str.contains('[a-zA-Z]', regex=True).any()))
+
+        if needs_encoding:
+            target_encoder = LabelEncoder()
+            y_encoded = target_encoder.fit_transform(y.astype(str))
+            y = pd.Series(y_encoded, index=y.index)
+            target_encoders['target'] = target_encoder
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_combined, y, test_size=0.2, random_state=42, shuffle=True
+    )
+
+    feature_names = []
+    if tfidf_vectorizer:
+        try:
+            tfidf_feature_names = tfidf_vectorizer.get_feature_names_out()
+        except AttributeError:
+            tfidf_feature_names = tfidf_vectorizer.get_feature_names()
+        feature_names.extend(tfidf_feature_names.tolist())
+    if not X_non_text.empty:
+        feature_names.extend(X_non_text.columns.tolist())
+
+    processors = {
+        'tfidf_vectorizer': tfidf_vectorizer,
+        'imputer': imputer,
+        'scaler': scaler,
+        'label_encoders': label_encoders,
+        'target_encoders': target_encoders
+    }
+
+    return (X_train, X_test, y_train, y_test, feature_names,
+            processors, task_type)
+
+
+def create_models_with_hyperparameter_tuning(task_type, random_state=42, n_iter=10, cv=3):
+    """
+    Create models with hyperparameter tuning using RandomizedSearchCV.
+    
+    Args:
+        task_type: 'Regression' or 'Classification'
+        random_state: Random state for reproducibility
+        n_iter: Number of parameter settings sampled (default: 10 for speed)
+        cv: Number of cross-validation folds (default: 3 for speed)
+    
+    Returns:
+        dict: Dictionary of models with hyperparameter tuning
+    """
+    models_dict = {}
+    
+    if task_type == 'Regression':
+        # RandomForest Regressor
+        rf_param_grid = {
+            'n_estimators': [100, 200, 300],
+            'max_depth': [5, 7, 10, None],
+            'min_samples_split': [2, 5, 10]
+        }
+        rf_base = RandomForestRegressor(random_state=random_state, n_jobs=-1)
+        models_dict['RandomForest'] = RandomizedSearchCV(
+            rf_base, rf_param_grid, cv=cv, scoring='r2', n_jobs=-1,
+            n_iter=n_iter, random_state=random_state, verbose=1
+        )
+        
+        # XGBoost Regressor
+        xgb_param_grid = {
+            'n_estimators': [100, 200],
+            'max_depth': [3, 4, 5],
+            'learning_rate': [0.1, 0.2, 0.3],
+            'subsample': [0.8, 1.0]
+        }
+        xgb_base = xgb.XGBRegressor(random_state=random_state, verbosity=0, n_jobs=-1)
+        models_dict['XGBoost'] = RandomizedSearchCV(
+            xgb_base, xgb_param_grid, cv=cv, scoring='r2', n_jobs=-1,
+            n_iter=n_iter, random_state=random_state, verbose=1
+        )
+        
+        # LightGBM Regressor
+        lgb_param_grid = {
+            'n_estimators': [100, 200],
+            'max_depth': [3, 4, 5],
+            'learning_rate': [0.1, 0.2],
+            'num_leaves': [31, 50]
+        }
+        lgb_base = lgb.LGBMRegressor(random_state=random_state, verbosity=-1, n_jobs=-1)
+        models_dict['LightGBM'] = RandomizedSearchCV(
+            lgb_base, lgb_param_grid, cv=cv, scoring='r2', n_jobs=-1,
+            n_iter=n_iter, random_state=random_state, verbose=1
+        )
+        
+        # LogisticRegression (Ridge for regression)
+        ridge_param_grid = {'alpha': [0.01, 0.1, 1, 10]}
+        ridge_base = Ridge(random_state=random_state)
+        models_dict['LogisticRegression'] = GridSearchCV(
+            ridge_base, ridge_param_grid, cv=cv, scoring='r2', n_jobs=-1, verbose=1
+        )
+        
+    else:  # Classification
+        # RandomForest Classifier
+        rf_param_grid = {
+            'n_estimators': [100, 200, 300],
+            'max_depth': [5, 7, None],
+            'min_samples_split': [2, 5]
+        }
+        rf_base = RandomForestClassifier(random_state=random_state, n_jobs=-1)
+        models_dict['RandomForest'] = RandomizedSearchCV(
+            rf_base, rf_param_grid, cv=cv, scoring='accuracy', n_jobs=-1,
+            n_iter=n_iter, random_state=random_state, verbose=1
+        )
+        
+        # XGBoost Classifier
+        xgb_param_grid = {
+            'n_estimators': [100, 200],
+            'max_depth': [3, 4, 5],
+            'learning_rate': [0.1, 0.2],
+            'subsample': [0.8, 1.0]
+        }
+        xgb_base = xgb.XGBClassifier(random_state=random_state, verbosity=0, n_jobs=-1, eval_metric='logloss')
+        models_dict['XGBoost'] = RandomizedSearchCV(
+            xgb_base, xgb_param_grid, cv=cv, scoring='accuracy', n_jobs=-1,
+            n_iter=n_iter, random_state=random_state, verbose=1
+        )
+        
+        # LightGBM Classifier
+        lgb_param_grid = {
+            'n_estimators': [100, 200],
+            'max_depth': [3, 4, 5],
+            'learning_rate': [0.1, 0.2],
+            'num_leaves': [31, 50]
+        }
+        lgb_base = lgb.LGBMClassifier(random_state=random_state, verbosity=-1, n_jobs=-1)
+        models_dict['LightGBM'] = RandomizedSearchCV(
+            lgb_base, lgb_param_grid, cv=cv, scoring='accuracy', n_jobs=-1,
+            n_iter=n_iter, random_state=random_state, verbose=1
+        )
+        
+        # LogisticRegression Classifier
+        lr_param_grid = {
+            'C': [0.01, 0.1, 1, 10],
+            'solver': ['lbfgs', 'liblinear']
+        }
+        lr_base = LogisticRegression(max_iter=1000, random_state=random_state, multi_class='auto')
+        models_dict['LogisticRegression'] = RandomizedSearchCV(
+            lr_base, lr_param_grid, cv=cv, scoring='accuracy', n_jobs=-1,
+            n_iter=n_iter, random_state=random_state, verbose=1
+        )
+    
+    return models_dict
+
+
+def calculate_all_metrics(y_true, y_pred, task_type):
+    """
+    Calculate all relevant metrics based on task type.
+
+    Args:
+        y_true: True target values
+        y_pred: Predicted values
+        task_type: 'Regression' or 'Classification'
+
+    Returns:
+        dict: Dictionary of all calculated metrics
+    """
+    metrics = {}
+
+    if task_type == 'Regression':
+        metrics['R2'] = float(r2_score(y_true, y_pred))
+        metrics['MAE'] = float(mean_absolute_error(y_true, y_pred))
+        metrics['RMSE'] = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            mape = np.mean(np.abs((y_true - y_pred) / np.clip(y_true, 1e-8, None))) * 100
+        metrics['MAPE'] = float(mape) if not np.isnan(mape) else np.nan
+
+        mean_y = np.mean(y_true)
+        reg_accuracy = 1.0 - (metrics['MAE'] / mean_y) if mean_y != 0 else 0.0
+        metrics['Regression_Accuracy'] = float(np.clip(reg_accuracy, 0.0, 1.0))
+        metrics['R2_Normalized_0_5'] = float(np.clip(metrics['R2'] * 5.0, 0.0, 5.0))
+
+        median_y = np.median(y_true)
+        y_true_class = (y_true > median_y).astype(int)
+        y_pred_class = (y_pred > median_y).astype(int)
+        metrics['Classification_Accuracy'] = float(accuracy_score(y_true_class, y_pred_class))
+        metrics['F1_Score'] = float(f1_score(y_true_class, y_pred_class, average='weighted'))
+
+    else:  # Classification
+        metrics['Classification_Accuracy'] = float(accuracy_score(y_true, y_pred))
+        metrics['F1_Score'] = float(f1_score(y_true, y_pred, average='weighted'))
+        metrics['R2'] = float(r2_score(y_true, y_pred))
+        metrics['MAE'] = float(mean_absolute_error(y_true, y_pred))
+        metrics['RMSE'] = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            mape = np.mean(np.abs((y_true - y_pred) / np.clip(y_true, 1e-8, None))) * 100
+        metrics['MAPE'] = float(mape) if not np.isnan(mape) else np.nan
+
+        mean_y = np.mean(y_true)
+        reg_accuracy = 1.0 - (metrics['MAE'] / mean_y) if mean_y != 0 else 0.0
+        metrics['Regression_Accuracy'] = float(np.clip(reg_accuracy, 0.0, 1.0))
+        metrics['R2_Normalized_0_5'] = float(np.clip(metrics['R2'] * 5.0, 0.0, 5.0))
+
+    return metrics
+
+
+def train_and_evaluate_models(X_train, X_test, y_train, y_test, task_type, target_name='target'):
+    """
+    Train all 4 models with hyperparameter tuning and evaluate them.
+    Supports multi-target scenarios.
+
+    Args:
+        X_train, X_test: Training and test features (can be sparse)
+        y_train, y_test: Training and test targets (can be DataFrame for multi-target)
+        task_type: 'Regression', 'Classification', or 'Multi-label'
+        target_name: Name of target column (for multi-target, this is the column name)
+
+    Returns:
+        list: List of dictionaries with results for each model
+    """
+    results = []
+    is_multi_target = isinstance(y_train, pd.DataFrame)
+
+    def to_dense_if_needed(X, model_name):
+        """Convert sparse to dense for models that don't support sparse input"""
+        if hasattr(X, 'toarray'):
+            if model_name == 'LogisticRegression' and X.shape[1] < 50000:
+                return X.toarray()
+        return X
+
+    # Create models with hyperparameter tuning
+    print(f"  🔍 Creating models with hyperparameter tuning (n_iter=10, cv=3)...")
+    models = create_models_with_hyperparameter_tuning(task_type, random_state=42, n_iter=10, cv=3)
+
+    # Train and evaluate each model
+    for model_name, model in models.items():
+        try:
+            print(f"  🔹 Training {model_name} with hyperparameter tuning...")
+
+            X_train_model = to_dense_if_needed(X_train, model_name)
+            X_test_model = to_dense_if_needed(X_test, model_name)
+
+            if task_type == 'Regression' and model_name == 'LogisticRegression':
+                if is_multi_target:
+                    median_y = np.median(y_train.values)
+                    y_train_class = (y_train.values > median_y).astype(int)
+                    y_test_class = (y_test.values > median_y).astype(int)
+                else:
+                    median_y = np.median(y_train)
+                    y_train_class = (y_train > median_y).astype(int)
+                    y_test_class = (y_test > median_y).astype(int)
+
+                model.fit(X_train_model, y_train_class)
+                if hasattr(model, 'best_estimator_'):
+                    best_model = model.best_estimator_
+                    print(f"      ✅ Best params for {model_name}: {model.best_params_}")
+                else:
+                    best_model = model
+                y_pred_class = best_model.predict(X_test_model)
+                if is_multi_target:
+                    median_test = np.median(y_test.values)
+                    y_pred = np.where(y_pred_class == 1, median_test * 1.1, median_test * 0.9)
+                else:
+                    median_test = np.median(y_test)
+                    y_pred = np.where(y_pred_class == 1, median_test * 1.1, median_test * 0.9)
+            else:
+                if is_multi_target:
+                    y_train_single = y_train.iloc[:, 0] if isinstance(y_train, pd.DataFrame) else y_train
+                    y_test_single = y_test.iloc[:, 0] if isinstance(y_test, pd.DataFrame) else y_test
+                    model.fit(X_train_model, y_train_single)
+                    if hasattr(model, 'best_estimator_'):
+                        best_model = model.best_estimator_
+                        print(f"      ✅ Best params for {model_name}: {model.best_params_}")
+                    else:
+                        best_model = model
+                    y_pred = best_model.predict(X_test_model)
+                else:
+                    model.fit(X_train_model, y_train)
+                    if hasattr(model, 'best_estimator_'):
+                        best_model = model.best_estimator_
+                        print(f"      ✅ Best params for {model_name}: {model.best_params_}")
+                    else:
+                        best_model = model
+                    y_pred = best_model.predict(X_test_model)
+
+            if is_multi_target:
+                y_test_eval = y_test.iloc[:, 0] if isinstance(y_test, pd.DataFrame) else y_test
+            else:
+                y_test_eval = y_test
+
+            metrics = calculate_all_metrics(y_test_eval, y_pred, task_type)
+
+            result = {
+                'Model': model_name,
+                'Task_Type': task_type,
+                'Target': target_name
+            }
+            result.update(metrics)
+            results.append(result)
+
+            print(f"    ✅ {model_name}: ", end="")
+            if task_type == 'Regression':
+                print(f"R²={metrics['R2']:.4f}, MAE={metrics['MAE']:.4f}, "
+                      f"Reg_Acc={metrics['Regression_Accuracy']:.4f}")
+            else:
+                print(f"Acc={metrics['Classification_Accuracy']:.4f}, "
+                      f"F1={metrics['F1_Score']:.4f}")
+
+        except Exception as e:
+            print(f"    ❌ Error training {model_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+    return results
+
+
+def calculate_accuracies_for_dataset(dataset_path, target_column, task_type='auto',
+                                     feature_columns=None, use_tfidf=True,
+                                     max_tfidf_features=10000, **kwargs):
+    """
+    Main function: Calculate all accuracy metrics for all models on any dataset.
+    Supports single-target and multi-target scenarios with TF-IDF for text features.
+    **NOW INCLUDES HYPERPARAMETER TUNING**
+
+    Args:
+        dataset_path: Path to CSV file or pandas DataFrame
+        target_column: Name of target variable column(s). Can be:
+            - Single string: 'target_column'
+            - List of strings: ['target1', 'target2', ...] for multi-target
+        task_type: 'auto' (detect automatically), 'Regression', 'Classification', or 'Multi-label'
+        feature_columns: List of feature columns to use (None = use all except target)
+        use_tfidf: Whether to use TF-IDF for text columns (default: True)
+        max_tfidf_features: Maximum features for TF-IDF (default: 10000)
+        **kwargs: Additional arguments for pd.read_csv (e.g., nrows, encoding)
+
+    Returns:
+        pd.DataFrame: Comprehensive results with all metrics for all models
+
+    Example:
+        # Single target
+        >>> results = calculate_accuracies_for_dataset(
+        ...     'data.csv',
+        ...     'target_column',
+        ...     task_type='auto'
+        ... )
+
+        # Multi-target (like budget prediction)
+        >>> results = calculate_accuracies_for_dataset(
+        ...     'budget_data.csv',
+        ...     ['Function', 'Object_Type', 'Operating_Status'],
+        ...     task_type='Multi-label',
+        ...     use_tfidf=True
+        ... )
+    """
+    print("="*80)
+    print("GENERIC ACCURACY CALCULATOR WITH HYPERPARAMETER TUNING")
+    print("="*80)
+
+    # Load dataset
+    print(f"\n📂 Loading dataset: {dataset_path}")
+    if isinstance(dataset_path, str):
+        if not os.path.exists(dataset_path):
+            raise FileNotFoundError(f"Dataset not found: {dataset_path}")
+        df = pd.read_csv(dataset_path, **kwargs)
+    elif isinstance(dataset_path, pd.DataFrame):
+        df = dataset_path.copy()
+    else:
+        raise ValueError("dataset_path must be a file path (str) or pandas DataFrame")
+
+    print(f"  ✅ Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
+
+    # Detect and transform wide-format datasets
+    df, was_transformed = detect_and_transform_wide_format(df)
+    if was_transformed:
+        print(f"  ✅ Dataset transformed from wide to long format")
+        if isinstance(target_column, str):
+            if target_column == 'auto' or target_column not in df.columns:
+                possible_value_cols = ['Enrollment', 'Value', 'Count', 'Amount', 'Quantity', 'Measure']
+                found_value_col = None
+                for col in possible_value_cols:
+                    if col in df.columns:
+                        if pd.api.types.is_numeric_dtype(df[col]):
+                            found_value_col = col
+                            break
+
+                if not found_value_col:
+                    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                    exclude_cols = ['Time_Period', 'Year', 'Period', 'Index']
+                    value_cols = [col for col in numeric_cols if col not in exclude_cols]
+                    if value_cols:
+                        found_value_col = value_cols[0]
+
+                if found_value_col:
+                    print(f"  💡 Auto-detected: Using '{found_value_col}' as target column")
+                    target_column = found_value_col
+                elif 'Value' in df.columns:
+                    print(f"  💡 Using 'Value' as target column")
+                    target_column = 'Value'
+
+    if isinstance(target_column, str):
+        target_columns = [target_column]
+        is_multi_target = False
+    elif isinstance(target_column, list):
+        target_columns = target_column
+        is_multi_target = True
+    else:
+        raise ValueError("target_column must be a string or list of strings")
+
+    missing_cols = [col for col in target_columns if col not in df.columns]
+    if missing_cols:
+        available_cols = ', '.join(df.columns.tolist()[:10])
+        raise ValueError(f"Target column(s) not found: {missing_cols}\n"
+                        f"Available columns: {available_cols}...")
+
+    if is_multi_target:
+        y = df[target_columns].copy()
+        print(f"  ✅ Multi-target: {len(target_columns)} target columns")
+        first_target = y.iloc[:, 0]
+        if isinstance(first_target, pd.Series):
+            is_categorical = (first_target.dtype == 'object' or
+                            first_target.dtype.name == 'category' or
+                            first_target.astype(str).str.contains('[a-zA-Z]', regex=True).any())
+            if is_categorical and task_type == 'Regression':
+                print(f"  ⚠️ Detected categorical string targets. Changing task_type from 'Regression' to 'Multi-label'")
+                task_type = 'Multi-label'
+    else:
+        y = df[target_columns[0]].copy()
+        print(f"  ✅ Single target: {target_columns[0]}")
+        if isinstance(y, pd.Series):
+            is_categorical = (y.dtype == 'object' or
+                            y.dtype.name == 'category' or
+                            y.astype(str).str.contains('[a-zA-Z]', regex=True).any())
+            if is_categorical and task_type == 'Regression':
+                print(f"  ⚠️ Detected categorical string target. Changing task_type from 'Regression' to 'Classification'")
+                task_type = 'Classification'
+
+    if feature_columns is None:
+        X = df.drop(columns=target_columns)
+    else:
+        missing_cols = [col for col in feature_columns if col not in df.columns]
+        if missing_cols:
+            raise ValueError(f"Feature columns not found: {missing_cols}")
+        X = df[feature_columns].copy()
+
+    print(f"  ✅ Features: {X.shape[1]} columns")
+
+    all_results = []
+    detected_task_type = None
+
+    if is_multi_target:
+        print(f"\n🔄 Processing {len(target_columns)} target columns...")
+        for target_col in target_columns:
+            print(f"\n  📊 Processing target: {target_col}")
+            y_single = df[target_col].copy()
+
+            print(f"  🔧 Preprocessing data...")
+            X_train, X_test, y_train, y_test, feature_names, processors, detected_task_type = \
+                preprocess_data(X, y_single, task_type, use_tfidf, max_tfidf_features)
+
+            print(f"    ✅ Task type: {detected_task_type}")
+            print(f"    ✅ Training set: {X_train.shape[0]} samples")
+            print(f"    ✅ Test set: {X_test.shape[0]} samples")
+
+            print(f"  🤖 Training and evaluating models with hyperparameter tuning...")
+            results = train_and_evaluate_models(X_train, X_test, y_train, y_test,
+                                                detected_task_type, target_name=target_col)
+
+            all_results.extend(results)
+    else:
+        print(f"\n🔧 Preprocessing data...")
+        X_train, X_test, y_train, y_test, feature_names, processors, detected_task_type = \
+            preprocess_data(X, y, task_type, use_tfidf, max_tfidf_features)
+
+        print(f"  ✅ Task type: {detected_task_type}")
+        print(f"  ✅ Training set: {X_train.shape[0]} samples")
+        print(f"  ✅ Test set: {X_test.shape[0]} samples")
+        print(f"  ✅ Total features: {X_train.shape[1]} (including TF-IDF if used)")
+
+        print(f"\n🤖 Training and evaluating models with hyperparameter tuning...")
+        results = train_and_evaluate_models(X_train, X_test, y_train, y_test,
+                                            detected_task_type, target_name=target_columns[0])
+        all_results.extend(results)
+
+    results_df = pd.DataFrame(all_results)
+
+    results_df['Dataset'] = os.path.basename(dataset_path) if isinstance(dataset_path, str) else 'DataFrame'
+    if is_multi_target:
+        results_df['Target_Column'] = results_df['Target']
+    else:
+        results_df['Target_Column'] = target_columns[0]
+    results_df['Num_Features'] = X.shape[1]
+    results_df['Num_Samples'] = len(df)
+    text_cols = detect_text_columns(X) if use_tfidf else []
+    results_df['Used_TFIDF'] = len(text_cols) > 0
+
+    col_order = ['Dataset', 'Target_Column', 'Task_Type', 'Model', 'Num_Features', 'Num_Samples',
+                 'R2', 'MAE', 'RMSE', 'MAPE', 'Regression_Accuracy', 'Classification_Accuracy',
+                 'F1_Score', 'R2_Normalized_0_5', 'Used_TFIDF']
+    results_df = results_df[[col for col in col_order if col in results_df.columns]]
+
+    print("\n" + "="*80)
+    print("RESULTS SUMMARY")
+    print("="*80)
+    print(f"\nTask Type: {detected_task_type}")
+    print(f"Dataset: {os.path.basename(dataset_path) if isinstance(dataset_path, str) else 'DataFrame'}")
+    if is_multi_target:
+        print(f"Targets: {', '.join(target_columns)}")
+    else:
+        print(f"Target: {target_columns[0]}")
+    print(f"\nModel Performance:")
+    display_cols = ['Model', 'Target'] if is_multi_target else ['Model']
+    display_cols.extend(['R2', 'Classification_Accuracy', 'Regression_Accuracy', 'F1_Score'])
+    print(results_df[[col for col in display_cols if col in results_df.columns]].to_string(index=False))
+
+    if detected_task_type == 'Regression':
+        best_idx = results_df['R2'].idxmax()
+        best_model = results_df.loc[best_idx, 'Model']
+        best_score = results_df.loc[best_idx, 'R2']
+        print(f"\n🏆 Best Model (by R²): {best_model} (R² = {best_score:.4f})")
+    else:
+        best_idx = results_df['Classification_Accuracy'].idxmax()
+        best_model = results_df.loc[best_idx, 'Model']
+        best_score = results_df.loc[best_idx, 'Classification_Accuracy']
+        print(f"\n🏆 Best Model (by Accuracy): {best_model} (Accuracy = {best_score:.4f})")
+
+    return results_df
+
+
+def calculate_accuracies_for_multiple_datasets(datasets_config):
+    """
+    Calculate accuracies for multiple datasets at once.
+
+    Args:
+        datasets_config: List of dictionaries, each containing:
+            - 'dataset_path': Path to dataset
+            - 'target_column': Target column name
+            - 'task_type': (optional) Task type
+            - 'name': (optional) Dataset name
+
+    Returns:
+        pd.DataFrame: Combined results from all datasets
+    """
+    all_results = []
+
+    for i, config in enumerate(datasets_config):
+        dataset_path = config['dataset_path']
+        target_column = config['target_column']
+        task_type = config.get('task_type', 'auto')
+        dataset_name = config.get('name', f'Dataset_{i+1}')
+
+        print(f"\n{'='*80}")
+        print(f"PROCESSING DATASET {i+1}/{len(datasets_config)}: {dataset_name}")
+        print(f"{'='*80}")
+
+        try:
+            results = calculate_accuracies_for_dataset(
+                dataset_path=dataset_path,
+                target_column=target_column,
+                task_type=task_type
+            )
+            results['Dataset_Name'] = dataset_name
+            all_results.append(results)
+        except Exception as e:
+            print(f"❌ Error processing {dataset_name}: {e}")
+            continue
+
+    if all_results:
+        combined_results = pd.concat(all_results, ignore_index=True)
+
+        print("\n" + "="*80)
+        print("COMBINED RESULTS SUMMARY")
+        print("="*80)
+
+        print("\nAverage Performance by Model (across all datasets):")
+        model_summary = combined_results.groupby('Model').agg({
+            'R2': 'mean',
+            'Classification_Accuracy': 'mean',
+            'Regression_Accuracy': 'mean',
+            'F1_Score': 'mean'
+        }).round(4).sort_values('Classification_Accuracy', ascending=False)
+        print(model_summary)
+
+        return combined_results
+    else:
+        print("\n❌ No results generated.")
+        return pd.DataFrame()
+
+
+if __name__ == "__main__":
+    print("""
+    ============================================================================
+    GENERIC ACCURACY CALCULATOR WITH HYPERPARAMETER TUNING
+    ============================================================================
+    
+    This module includes:
+    ✅ Automatic task type detection (Regression/Classification)
+    ✅ Preprocessing with TF-IDF for text features
+    ✅ Hyperparameter tuning using RandomizedSearchCV (fast: n_iter=10, cv=3)
+    ✅ Support for single-target and multi-target scenarios
+    ✅ All 4 models: RandomForest, XGBoost, LightGBM, LogisticRegression
+    
+    Example Usage:
+    --------------
+    from GENERIC_ACCURACY_CALCULATOR_WITH_HYPERPARAMETER_TUNING import calculate_accuracies_for_dataset
+    
+    results = calculate_accuracies_for_dataset(
+        dataset_path='your_data.csv',
+        target_column='target_variable',
+        task_type='auto'
+    )
+    
+    results.to_csv('results.csv', index=False)
+    """)
+
