@@ -1105,33 +1105,54 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
             # SHAP Analysis with Visualizations (with fallback to model feature importance)
             print(f"  📊 Running SHAP Analysis...")
             
-            def get_feature_importance_fallback(model, model_name, feature_names):
-                """Get feature importance from model itself when SHAP fails."""
-                try:
-                    # For tree-based models
-                    if hasattr(model, 'feature_importances_'):
-                        importances = model.feature_importances_
-                        importance_dict = dict(zip(feature_names, importances))
-                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                        return importance_dict, sorted_features, 'Model_Feature_Importance'
+        def get_feature_importance_fallback(model, model_name, feature_names):
+            """Get feature importance from model itself when SHAP fails."""
+            try:
+                # Try to use model's feature names if available (most accurate)
+                if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
+                    model_feature_names = list(model.feature_names_in_)
+                    print(f"        ℹ️ Using model's feature names (from feature_names_in_)")
+                    feature_names_to_use = model_feature_names
+                else:
+                    feature_names_to_use = feature_names
+                
+                # For tree-based models
+                if hasattr(model, 'feature_importances_'):
+                    importances = model.feature_importances_
                     
-                    # For linear models (LogisticRegression, Ridge)
-                    elif hasattr(model, 'coef_'):
-                        coef = model.coef_
-                        # Handle multi-class (coef_ is 2D)
-                        if coef.ndim > 1:
-                            coef = np.abs(coef).mean(axis=0)  # Average across classes
-                        else:
-                            coef = np.abs(coef)
-                        importance_dict = dict(zip(feature_names, coef))
-                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                        return importance_dict, sorted_features, 'Model_Coefficient_Importance'
+                    # Verify length matches
+                    if len(feature_names_to_use) != len(importances):
+                        print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match importances ({len(importances)})")
+                        feature_names_to_use = [f'feature_{i}' for i in range(len(importances))]
                     
+                    importance_dict = dict(zip(feature_names_to_use, importances))
+                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                    return importance_dict, sorted_features, 'Model_Feature_Importance'
+                
+                # For linear models (LogisticRegression, Ridge)
+                elif hasattr(model, 'coef_'):
+                    coef = model.coef_
+                    # Handle multi-class (coef_ is 2D)
+                    if coef.ndim > 1:
+                        coef = np.abs(coef).mean(axis=0)  # Average across classes
                     else:
-                        return {}, [], 'No_Importance_Available'
-                except Exception as e:
-                    print(f"        ⚠️ Fallback feature importance failed: {e}")
+                        coef = np.abs(coef)
+                    
+                    # Verify feature_names length matches
+                    if len(feature_names_to_use) != len(coef):
+                        print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match coefficients ({len(coef)})")
+                        # Create generic names if mismatch
+                        feature_names_to_use = [f'feature_{i}' for i in range(len(coef))]
+                    
+                    importance_dict = dict(zip(feature_names_to_use, coef))
+                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                    return importance_dict, sorted_features, 'Model_Coefficient_Importance'
+                
+                else:
                     return {}, [], 'No_Importance_Available'
+            except Exception as e:
+                print(f"        ⚠️ Fallback feature importance failed: {e}")
+                return {}, [], 'No_Importance_Available'
             
             for model_name, model in models_dict.items():
                 try:
@@ -1141,21 +1162,22 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     sorted_features = []
                     method_used = 'Unknown'
                     
-                    # Try SHAP first (only for tree-based models)
-                    if model_name in ['RandomForest', 'XGBoost', 'LightGBM']:
-                        try:
-                            import shap
-                            
-                            # Convert sparse matrix to dense if needed
-                            if hasattr(X_test, 'toarray'):
-                                X_test_dense = X_test.toarray()
-                            else:
-                                X_test_dense = np.array(X_test)
-                            
-                            # Use more samples for better analysis (up to 200)
-                            n_samples = min(200, len(X_test_dense))
-                            X_test_sample = X_test_dense[:n_samples]
-                            
+                    # Try SHAP for all models (TreeExplainer for tree models, LinearExplainer for linear models)
+                    try:
+                        import shap
+                        
+                        # Convert sparse matrix to dense if needed
+                        if hasattr(X_test, 'toarray'):
+                            X_test_dense = X_test.toarray()
+                        else:
+                            X_test_dense = np.array(X_test)
+                        
+                        # Use more samples for better analysis (up to 200)
+                        n_samples = min(200, len(X_test_dense))
+                        X_test_sample = X_test_dense[:n_samples]
+                        
+                        if model_name in ['RandomForest', 'XGBoost', 'LightGBM']:
+                            # Tree-based models: use TreeExplainer
                             explainer = shap.TreeExplainer(model)
                             shap_values = explainer.shap_values(X_test_sample)
                             
@@ -1163,24 +1185,74 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                             if isinstance(shap_values, list):
                                 shap_values = shap_values[0]  # Use first class for multi-class
                             
-                            # Calculate mean absolute SHAP values
-                            mean_abs_shap = np.abs(shap_values).mean(0)
+                        elif model_name == 'LogisticRegression':
+                            # Linear models: use LinearExplainer (like in notebook)
+                            # Need background data for LinearExplainer
+                            if hasattr(X_train, 'toarray'):
+                                X_train_dense = X_train.toarray()
+                            else:
+                                X_train_dense = np.array(X_train)
                             
-                            # Create feature importance dictionary
-                            importance_dict = dict(zip(feature_names, mean_abs_shap))
-                            sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                            method_used = 'SHAP'
-                            shap_success = True
+                            # Use a sample of training data as background
+                            background_size = min(100, len(X_train_dense))
+                            background = X_train_dense[:background_size]
                             
-                        except Exception as e:
-                            print(f"      ⚠️ SHAP failed for {model_name}: {e}")
-                            print(f"      🔄 Using model's built-in feature importance instead...")
-                            importance_dict, sorted_features, method_used = get_feature_importance_fallback(
-                                model, model_name, feature_names
-                            )
+                            try:
+                                explainer = shap.LinearExplainer(model, background)
+                                shap_values = explainer.shap_values(X_test_sample)
+                                
+                                # Handle multi-class (LinearExplainer returns list for multi-class)
+                                if isinstance(shap_values, list):
+                                    shap_values = shap_values[0]  # Use first class
+                            except Exception as e:
+                                # If LinearExplainer fails (e.g., sparse matrix issues), fall back to coefficients
+                                print(f"      ⚠️ SHAP LinearExplainer failed: {e}")
+                                raise e
+                        else:
+                            # Other models - try TreeExplainer as fallback
+                            explainer = shap.TreeExplainer(model)
+                            shap_values = explainer.shap_values(X_test_sample)
+                            if isinstance(shap_values, list):
+                                shap_values = shap_values[0]
+                        
+                        # Calculate mean absolute SHAP values
+                        mean_abs_shap = np.abs(shap_values).mean(0)
+                        
+                    # Verify feature_names length matches
+                    if len(feature_names) != len(mean_abs_shap):
+                        print(f"      ⚠️ Feature names count ({len(feature_names)}) doesn't match SHAP values ({len(mean_abs_shap)})")
+                        print(f"      Using coefficient importance instead...")
+                        raise ValueError("Feature count mismatch")
+                    
+                    # Use model's feature names if available (sklearn 1.0+)
+                    if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
+                        model_feature_names = list(model.feature_names_in_)
+                        if len(model_feature_names) == len(mean_abs_shap):
+                            print(f"      ℹ️ Using model's feature names (from feature_names_in_)")
+                            feature_names_to_use = model_feature_names
+                        else:
+                            feature_names_to_use = feature_names
                     else:
-                        # For non-tree models, use built-in feature importance
-                        print(f"      ℹ️ {model_name} is not tree-based, using model's built-in importance...")
+                        feature_names_to_use = feature_names
+                    
+                    # Verify feature_names are valid (not categorical values like 'low', 'high', 'yes')
+                    # Feature names should be column names or TF-IDF terms, not categorical values
+                    invalid_keywords = ['low', 'high', 'yes', 'no', 'true', 'false', 'medium', 'small', 'large']
+                    invalid_names = [name for name in feature_names_to_use if any(kw in str(name).lower() for kw in invalid_keywords) and len(str(name)) < 10]
+                    if invalid_names and model_name == 'LogisticRegression':
+                        print(f"      ⚠️ Detected potentially invalid feature names: {invalid_names[:5]}")
+                        print(f"      First 10 feature names: {feature_names_to_use[:10]}")
+                        # Don't raise error, just warn - might be legitimate feature names
+                    
+                    # Create feature importance dictionary
+                    importance_dict = dict(zip(feature_names_to_use, mean_abs_shap))
+                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                        method_used = 'SHAP'
+                        shap_success = True
+                        
+                    except Exception as e:
+                        print(f"      ⚠️ SHAP failed for {model_name}: {e}")
+                        print(f"      🔄 Using model's built-in feature importance instead...")
                         importance_dict, sorted_features, method_used = get_feature_importance_fallback(
                             model, model_name, feature_names
                         )
@@ -1431,33 +1503,54 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
         # SHAP Analysis with Visualizations (with fallback to model feature importance)
         print(f"  📊 Running SHAP Analysis...")
         
-        def get_feature_importance_fallback(model, model_name, feature_names):
-            """Get feature importance from model itself when SHAP fails."""
-            try:
-                # For tree-based models
-                if hasattr(model, 'feature_importances_'):
-                    importances = model.feature_importances_
-                    importance_dict = dict(zip(feature_names, importances))
-                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                    return importance_dict, sorted_features, 'Model_Feature_Importance'
-                
-                # For linear models (LogisticRegression, Ridge)
-                elif hasattr(model, 'coef_'):
-                    coef = model.coef_
-                    # Handle multi-class (coef_ is 2D)
-                    if coef.ndim > 1:
-                        coef = np.abs(coef).mean(axis=0)  # Average across classes
+            def get_feature_importance_fallback(model, model_name, feature_names):
+                """Get feature importance from model itself when SHAP fails."""
+                try:
+                    # Try to use model's feature names if available (most accurate)
+                    if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
+                        model_feature_names = list(model.feature_names_in_)
+                        print(f"        ℹ️ Using model's feature names (from feature_names_in_)")
+                        feature_names_to_use = model_feature_names
                     else:
-                        coef = np.abs(coef)
-                    importance_dict = dict(zip(feature_names, coef))
-                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                    return importance_dict, sorted_features, 'Model_Coefficient_Importance'
-                
-                else:
+                        feature_names_to_use = feature_names
+                    
+                    # For tree-based models
+                    if hasattr(model, 'feature_importances_'):
+                        importances = model.feature_importances_
+                        
+                        # Verify length matches
+                        if len(feature_names_to_use) != len(importances):
+                            print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match importances ({len(importances)})")
+                            feature_names_to_use = [f'feature_{i}' for i in range(len(importances))]
+                        
+                        importance_dict = dict(zip(feature_names_to_use, importances))
+                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                        return importance_dict, sorted_features, 'Model_Feature_Importance'
+                    
+                    # For linear models (LogisticRegression, Ridge)
+                    elif hasattr(model, 'coef_'):
+                        coef = model.coef_
+                        # Handle multi-class (coef_ is 2D)
+                        if coef.ndim > 1:
+                            coef = np.abs(coef).mean(axis=0)  # Average across classes
+                        else:
+                            coef = np.abs(coef)
+                        
+                        # Verify feature_names length matches
+                        if len(feature_names_to_use) != len(coef):
+                            print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match coefficients ({len(coef)})")
+                            # Create generic names if mismatch
+                            feature_names_to_use = [f'feature_{i}' for i in range(len(coef))]
+                        
+                        importance_dict = dict(zip(feature_names_to_use, coef))
+                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                        return importance_dict, sorted_features, 'Model_Coefficient_Importance'
+                    
+                    else:
+                        return {}, [], 'No_Importance_Available'
+                except Exception as e:
+                    print(f"        ⚠️ Fallback feature importance failed: {e}")
                     return {}, [], 'No_Importance_Available'
-            except Exception as e:
-                print(f"        ⚠️ Fallback feature importance failed: {e}")
-                return {}, [], 'No_Importance_Available'
         
         for model_name, model in models_dict.items():
             try:
@@ -1467,21 +1560,22 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                 sorted_features = []
                 method_used = 'Unknown'
                 
-                # Try SHAP first (only for tree-based models)
-                if model_name in ['RandomForest', 'XGBoost', 'LightGBM']:
-                    try:
-                        import shap
-                        
-                        # Convert sparse matrix to dense if needed
-                        if hasattr(X_test, 'toarray'):
-                            X_test_dense = X_test.toarray()
-                        else:
-                            X_test_dense = np.array(X_test)
-                        
-                        # Use more samples for better analysis (up to 200)
-                        n_samples = min(200, len(X_test_dense))
-                        X_test_sample = X_test_dense[:n_samples]
-                        
+                # Try SHAP for all models (TreeExplainer for tree models, LinearExplainer for linear models)
+                try:
+                    import shap
+                    
+                    # Convert sparse matrix to dense if needed
+                    if hasattr(X_test, 'toarray'):
+                        X_test_dense = X_test.toarray()
+                    else:
+                        X_test_dense = np.array(X_test)
+                    
+                    # Use more samples for better analysis (up to 200)
+                    n_samples = min(200, len(X_test_dense))
+                    X_test_sample = X_test_dense[:n_samples]
+                    
+                    if model_name in ['RandomForest', 'XGBoost', 'LightGBM']:
+                        # Tree-based models: use TreeExplainer
                         explainer = shap.TreeExplainer(model)
                         shap_values = explainer.shap_values(X_test_sample)
                         
@@ -1489,24 +1583,74 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         if isinstance(shap_values, list):
                             shap_values = shap_values[0]  # Use first class for multi-class
                         
-                        # Calculate mean absolute SHAP values
-                        mean_abs_shap = np.abs(shap_values).mean(0)
+                    elif model_name == 'LogisticRegression':
+                        # Linear models: use LinearExplainer (like in notebook)
+                        # Need background data for LinearExplainer
+                        if hasattr(X_train, 'toarray'):
+                            X_train_dense = X_train.toarray()
+                        else:
+                            X_train_dense = np.array(X_train)
                         
-                        # Create feature importance dictionary
-                        importance_dict = dict(zip(feature_names, mean_abs_shap))
-                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                        method_used = 'SHAP'
-                        shap_success = True
+                        # Use a sample of training data as background
+                        background_size = min(100, len(X_train_dense))
+                        background = X_train_dense[:background_size]
                         
-                    except Exception as e:
-                        print(f"      ⚠️ SHAP failed for {model_name}: {e}")
-                        print(f"      🔄 Using model's built-in feature importance instead...")
-                        importance_dict, sorted_features, method_used = get_feature_importance_fallback(
-                            model, model_name, feature_names
-                        )
-                else:
-                    # For non-tree models, use built-in feature importance
-                    print(f"      ℹ️ {model_name} is not tree-based, using model's built-in importance...")
+                        try:
+                            explainer = shap.LinearExplainer(model, background)
+                            shap_values = explainer.shap_values(X_test_sample)
+                            
+                            # Handle multi-class (LinearExplainer returns list for multi-class)
+                            if isinstance(shap_values, list):
+                                shap_values = shap_values[0]  # Use first class
+                        except Exception as e:
+                            # If LinearExplainer fails (e.g., sparse matrix issues), fall back to coefficients
+                            print(f"      ⚠️ SHAP LinearExplainer failed: {e}")
+                            raise e
+                    else:
+                        # Other models - try TreeExplainer as fallback
+                        explainer = shap.TreeExplainer(model)
+                        shap_values = explainer.shap_values(X_test_sample)
+                        if isinstance(shap_values, list):
+                            shap_values = shap_values[0]
+                    
+                    # Calculate mean absolute SHAP values
+                    mean_abs_shap = np.abs(shap_values).mean(0)
+                    
+                    # Verify feature_names length matches
+                    if len(feature_names) != len(mean_abs_shap):
+                        print(f"      ⚠️ Feature names count ({len(feature_names)}) doesn't match SHAP values ({len(mean_abs_shap)})")
+                        print(f"      Using coefficient importance instead...")
+                        raise ValueError("Feature count mismatch")
+                    
+                    # Use model's feature names if available (sklearn 1.0+)
+                    if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
+                        model_feature_names = list(model.feature_names_in_)
+                        if len(model_feature_names) == len(mean_abs_shap):
+                            print(f"      ℹ️ Using model's feature names (from feature_names_in_)")
+                            feature_names_to_use = model_feature_names
+                        else:
+                            feature_names_to_use = feature_names
+                    else:
+                        feature_names_to_use = feature_names
+                    
+                    # Verify feature_names are valid (not categorical values like 'low', 'high', 'yes')
+                    # Feature names should be column names or TF-IDF terms, not categorical values
+                    invalid_keywords = ['low', 'high', 'yes', 'no', 'true', 'false', 'medium', 'small', 'large']
+                    invalid_names = [name for name in feature_names_to_use if any(kw in str(name).lower() for kw in invalid_keywords) and len(str(name)) < 10]
+                    if invalid_names and model_name == 'LogisticRegression':
+                        print(f"      ⚠️ Detected potentially invalid feature names: {invalid_names[:5]}")
+                        print(f"      First 10 feature names: {feature_names_to_use[:10]}")
+                        # Don't raise error, just warn - might be legitimate feature names
+                    
+                    # Create feature importance dictionary
+                    importance_dict = dict(zip(feature_names_to_use, mean_abs_shap))
+                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                    method_used = 'SHAP'
+                    shap_success = True
+                    
+                except Exception as e:
+                    print(f"      ⚠️ SHAP failed for {model_name}: {e}")
+                    print(f"      🔄 Using model's built-in feature importance instead...")
                     importance_dict, sorted_features, method_used = get_feature_importance_fallback(
                         model, model_name, feature_names
                     )
