@@ -41,6 +41,9 @@ from sklearn.metrics import (
 from scipy.sparse import hstack, csr_matrix
 import xgboost as xgb
 import lightgbm as lgb
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 
 # Try to import psutil (optional)
 try:
@@ -240,27 +243,120 @@ def calculate_data_quality_from_dataset(df):
 
 
 # ============================================================================
-# HELPER FUNCTION 5: perform_fairness_analysis
+# HELPER FUNCTION 5: Individual Fairness (for when no demographic groups)
+# ============================================================================
+
+def calculate_individual_fairness(X_test, predictions, k=5):
+    """
+    Measure if similar individuals get similar predictions (Individual Fairness).
+    
+    Args:
+        X_test: Feature matrix (n_samples, n_features)
+        predictions: Model predictions (n_samples,)
+        k: Number of nearest neighbors to consider
+    
+    Returns:
+        fairness_score: 0-5 score (higher = more fair)
+        avg_difference: Average prediction difference between similar individuals
+    """
+    try:
+        from sklearn.neighbors import NearestNeighbors
+        
+        # Convert predictions to numpy array if needed
+        if isinstance(predictions, pd.Series):
+            predictions = predictions.values
+        predictions = np.array(predictions)
+        
+        # Handle sparse matrices
+        if hasattr(X_test, 'toarray'):
+            X_test_dense = X_test.toarray()
+        else:
+            X_test_dense = np.array(X_test)
+        
+        # Find k+1 nearest neighbors for each person (k+1 because we exclude self)
+        nn = NearestNeighbors(n_neighbors=min(k+1, len(X_test_dense)), metric='euclidean')
+        nn.fit(X_test_dense)
+        distances, indices = nn.kneighbors(X_test_dense)
+        
+        fairness_scores = []
+        
+        # For each person, check their neighbors' predictions
+        for i in range(len(X_test_dense)):
+            # Get indices of k nearest neighbors (exclude self, which is index 0)
+            neighbor_indices = indices[i][1:]  # Skip index 0 (self)
+            
+            if len(neighbor_indices) == 0:
+                continue
+            
+            # Get predictions of neighbors
+            neighbor_predictions = predictions[neighbor_indices]
+            
+            # Calculate difference between this person's prediction and neighbors
+            prediction_diff = np.abs(predictions[i] - neighbor_predictions)
+            
+            # Average difference (lower = more fair)
+            avg_diff = np.mean(prediction_diff)
+            fairness_scores.append(avg_diff)
+        
+        if len(fairness_scores) == 0:
+            return 2.5, 0.0
+        
+        # Overall fairness = average of all individual fairness scores
+        avg_fairness_diff = np.mean(fairness_scores)
+        
+        # Convert to 0-5 scale
+        # Normalize based on prediction range
+        pred_range = np.max(predictions) - np.min(predictions)
+        if pred_range == 0:
+            pred_range = 1.0  # Avoid division by zero
+        
+        # Normalize difference relative to prediction range
+        normalized_diff = avg_fairness_diff / (pred_range + 1e-8)
+        
+        # Score: 5 if normalized_diff = 0, approaches 0 as normalized_diff increases
+        fairness_score = max(0, 5 * (1 - min(1, normalized_diff)))
+        
+        return round(fairness_score, 2), round(avg_fairness_diff, 4)
+        
+    except Exception as e:
+        print(f"    ⚠️ Individual fairness calculation failed: {e}")
+        return 2.5, 0.0
+
+
+# ============================================================================
+# HELPER FUNCTION 5B: perform_fairness_analysis
 # ============================================================================
 
 def perform_fairness_analysis(models_dict, X_test, y_test, predictions_dict, demographic_groups, task_type):
     """Perform fairness analysis across demographic groups."""
     fairness_results = {}
     
+    # Convert y_test to numpy array if needed
+    if isinstance(y_test, pd.Series):
+        y_test_array = y_test.values
+    else:
+        y_test_array = np.array(y_test)
+    
     for model_name, y_pred in predictions_dict.items():
         try:
+            # Convert predictions to numpy array if needed
+            if isinstance(y_pred, pd.Series):
+                y_pred_array = y_pred.values
+            else:
+                y_pred_array = np.array(y_pred)
+            
             if task_type == 'Regression':
                 disparities = []
                 for group_name, group_mask in demographic_groups.items():
                     if np.sum(group_mask) > 0:
-                        group_rmse = np.sqrt(mean_squared_error(y_test[group_mask], y_pred[group_mask]))
+                        group_rmse = np.sqrt(mean_squared_error(y_test_array[group_mask], y_pred_array[group_mask]))
                         disparities.append(group_rmse)
                 disparity = abs(disparities[0] - disparities[1]) if len(disparities) >= 2 else 0.0
             else:
                 accuracies = []
                 for group_name, group_mask in demographic_groups.items():
                     if np.sum(group_mask) > 0:
-                        group_acc = accuracy_score(y_test[group_mask], y_pred[group_mask])
+                        group_acc = accuracy_score(y_test_array[group_mask], y_pred_array[group_mask])
                         accuracies.append(group_acc)
                 disparity = abs(accuracies[0] - accuracies[1]) if len(accuracies) >= 2 else 0.0
             
@@ -577,9 +673,19 @@ def handle_fairness_analysis_without_synthetic_groups(
     df, demographic_column, y_test, models_dict, X_test, predictions_dict, 
     detected_task_type, target_col, all_results, perform_fairness_analysis
 ):
-    """Handle fairness analysis without creating synthetic groups."""
+    """Handle fairness analysis - uses Individual Fairness when no demographic groups."""
     if demographic_column and demographic_column in df.columns:
-        demo_values = df[demographic_column].iloc[y_test.index].values
+        # Handle y_test indexing - if it's a Series with index, use that; otherwise use position
+        if isinstance(y_test, pd.Series) and hasattr(y_test, 'index'):
+            try:
+                demo_values = df[demographic_column].iloc[y_test.index].values
+            except:
+                # Fallback: use position-based indexing
+                demo_values = df[demographic_column].iloc[:len(y_test)].values
+        else:
+            # Use position-based indexing
+            demo_values = df[demographic_column].iloc[:len(y_test)].values
+        
         unique_demos = np.unique(demo_values)
         if len(unique_demos) >= 2:
             demographic_groups = {demo: demo_values == demo for demo in unique_demos[:2]}
@@ -588,19 +694,42 @@ def handle_fairness_analysis_without_synthetic_groups(
                 demographic_groups, detected_task_type
             )
             fairness_df['Target'] = target_col
+            fairness_df['Fairness_Method'] = 'Demographic_Group_Disparity'
             all_results['fairness'].append(fairness_df)
             return fairness_df
         else:
-            print(f"    ⚠️ Fairness analysis is not applicable due to data limitations: Demographic column '{demographic_column}' has less than 2 unique groups.")
+            print(f"    ⚠️ Demographic column '{demographic_column}' has less than 2 unique groups.")
+            print(f"    🔄 Using Individual Fairness instead...")
     else:
-        print(f"    ⚠️ Fairness analysis is not applicable due to data limitations: No demographic groups found in dataset.")
+        print(f"    ℹ️ No demographic groups found. Using Individual Fairness...")
     
-    fairness_df = pd.DataFrame({
-        'Model': list(models_dict.keys()),
-        'Disparity': [np.nan] * len(models_dict),
-        'Note': ['Fairness analysis not applicable - no demographic groups'] * len(models_dict)
-    })
+    # Use Individual Fairness when no demographic groups
+    fairness_results = {}
+    for model_name, y_pred in predictions_dict.items():
+        try:
+            fairness_score, avg_diff = calculate_individual_fairness(X_test, y_pred, k=5)
+            # Convert fairness score to disparity-like metric (lower is better)
+            # For consistency with demographic disparity, we use (5 - fairness_score) as "disparity"
+            disparity_equivalent = max(0, 5 - fairness_score)
+            fairness_results[model_name] = {
+                'Disparity': round(disparity_equivalent, 4),
+                'Individual_Fairness_Score': round(fairness_score, 2),
+                'Avg_Prediction_Difference': round(avg_diff, 4)
+            }
+            print(f"      ✅ {model_name}: Individual Fairness Score = {fairness_score:.2f}/5.0, Avg Difference = {avg_diff:.4f}")
+        except Exception as e:
+            print(f"    ⚠️ Individual fairness failed for {model_name}: {e}")
+            fairness_results[model_name] = {
+                'Disparity': np.nan,
+                'Individual_Fairness_Score': 2.5,
+                'Avg_Prediction_Difference': np.nan
+            }
+    
+    fairness_df = pd.DataFrame(fairness_results).T
+    fairness_df.index.name = 'Model'
+    fairness_df = fairness_df.reset_index()
     fairness_df['Target'] = target_col
+    fairness_df['Fairness_Method'] = 'Individual_Fairness'
     all_results['fairness'].append(fairness_df)
     return fairness_df
 
@@ -916,29 +1045,89 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         **metrics
                     })
                     
+                    # Display metrics
+                    print(f"      ✅ {model_name} Metrics:")
+                    if detected_task_type == 'Regression':
+                        print(f"         R² Score:              {metrics['R2']:.4f}")
+                        print(f"         MAE:                   {metrics['MAE']:.4f}")
+                        print(f"         RMSE:                  {metrics['RMSE']:.4f}")
+                        print(f"         MAPE:                  {metrics['MAPE']:.2f}%")
+                        print(f"         Regression Accuracy:   {metrics['Regression_Accuracy']:.4f}")
+                    else:
+                        print(f"         Classification Accuracy: {metrics['Classification_Accuracy']:.4f}")
+                        print(f"         F1 Score:              {metrics['F1_Score']:.4f}")
+                    
                 except Exception as e:
                     print(f"    ⚠️ Error training {model_name}: {e}")
                     continue
 
-            # SHAP Analysis
+            # SHAP Analysis with Visualizations
             print(f"  📊 Running SHAP Analysis...")
             try:
                 import shap
+                shap.initjs()  # Initialize JS visualization
+                
                 for model_name, model in models_dict.items():
                     try:
+                        print(f"    Analyzing {model_name}...")
                         explainer = shap.TreeExplainer(model)
-                        shap_values = explainer.shap_values(X_test[:100])
+                        
+                        # Use more samples for better analysis (up to 200)
+                        n_samples = min(200, len(X_test))
+                        X_test_sample = X_test[:n_samples]
+                        
+                        shap_values = explainer.shap_values(X_test_sample)
+                        
+                        # Handle multi-class classification
+                        if isinstance(shap_values, list):
+                            shap_values = shap_values[0]  # Use first class for multi-class
+                        
+                        # Calculate mean absolute SHAP values
+                        mean_abs_shap = np.abs(shap_values).mean(0)
+                        
+                        # Create feature importance dictionary
+                        importance_dict = dict(zip(feature_names, mean_abs_shap))
+                        
+                        # Sort by importance
+                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                        
                         shap_results_dict[model_name] = {
                             'success': True,
                             'shap_values': shap_values,
-                            'importance': dict(zip(feature_names, np.abs(shap_values).mean(0)))
+                            'importance': importance_dict,
+                            'mean_abs_shap': mean_abs_shap,
+                            'sorted_features': sorted_features
                         }
-                    except:
-                        shap_results_dict[model_name] = {'success': False, 'importance': {}}
+                        
+                        # Create visualization for top 20 features
+                        print(f"      📈 Creating SHAP visualization for {model_name}...")
+                        top_n = min(20, len(sorted_features))
+                        top_features = sorted_features[:top_n]
+                        
+                        feature_names_plot = [f[0] for f in top_features]
+                        shap_values_plot = [f[1] for f in top_features]
+                        
+                        plt.figure(figsize=(10, 8))
+                        plt.barh(range(len(feature_names_plot)), shap_values_plot)
+                        plt.yticks(range(len(feature_names_plot)), feature_names_plot)
+                        plt.xlabel('Mean |SHAP Value|', fontsize=12)
+                        plt.title(f'Top {top_n} SHAP Feature Importance - {model_name}', fontsize=14, fontweight='bold')
+                        plt.gca().invert_yaxis()
+                        plt.tight_layout()
+                        plt.show()
+                        
+                        # Print top features
+                        print(f"      Top 10 Features for {model_name}:")
+                        for i, (feat, val) in enumerate(top_features[:10], 1):
+                            print(f"        {i:2d}. {feat:30s}: {val:.4f}")
+                        
+                    except Exception as e:
+                        print(f"      ⚠️ SHAP analysis failed for {model_name}: {e}")
+                        shap_results_dict[model_name] = {'success': False, 'importance': {}, 'mean_abs_shap': np.array([])}
             except ImportError:
                 print(f"    ⚠️ SHAP not available, skipping SHAP analysis")
                 for model_name in models_dict.keys():
-                    shap_results_dict[model_name] = {'success': False, 'importance': {}}
+                    shap_results_dict[model_name] = {'success': False, 'importance': {}, 'mean_abs_shap': np.array([])}
 
             # Fairness Analysis (without synthetic groups)
             print(f"  ⚖️ Running Fairness Analysis...")
@@ -966,10 +1155,16 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     interpretability = calculate_interpretability(model_name, shap_success, feature_imp_available)
                     
                     fairness_row = fairness_df[fairness_df['Model'] == model_name]
-                    if not fairness_row.empty and 'Disparity' in fairness_row.columns:
-                        disparity = fairness_row['Disparity'].iloc[0]
-                        max_disparity = fairness_df['Disparity'].max() if len(fairness_df) > 0 else disparity * 2 if not np.isnan(disparity) else 1.0
-                        fairness_score = calculate_fairness_from_disparity(disparity, max_disparity)
+                    if not fairness_row.empty:
+                        # Check if Individual Fairness Score is available
+                        if 'Individual_Fairness_Score' in fairness_row.columns:
+                            fairness_score = fairness_row['Individual_Fairness_Score'].iloc[0]
+                        elif 'Disparity' in fairness_row.columns:
+                            disparity = fairness_row['Disparity'].iloc[0]
+                            max_disparity = fairness_df['Disparity'].max() if len(fairness_df) > 0 else disparity * 2 if not np.isnan(disparity) else 1.0
+                            fairness_score = calculate_fairness_from_disparity(disparity, max_disparity)
+                        else:
+                            fairness_score = 2.5
                     else:
                         fairness_score = 2.5
                     
@@ -994,6 +1189,20 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
             
             readiness_df = pd.DataFrame(readiness_list)
             all_results['readiness'].append(readiness_df)
+            
+            # Display Readiness Index
+            print(f"\n  📊 Readiness Index for {target_col}:")
+            print("=" * 80)
+            print(f"{'Model':<20} {'Interpretability':<18} {'Fairness':<12} {'Scalability':<14} {'Accuracy':<12} {'Data Quality':<14} {'Total Score':<12}")
+            print("=" * 80)
+            for _, row in readiness_df.iterrows():
+                print(f"{row['Model']:<20} {row['Interpretability']:<18.2f} {row['Fairness']:<12.2f} "
+                      f"{row['Scalability']:<14.2f} {row['Accuracy']:<12.2f} {row['Data_Quality']:<14.2f} {row['Total_Score']:<12.2f}")
+            print("=" * 80)
+            best_model = readiness_df.loc[readiness_df['Total_Score'].idxmax(), 'Model']
+            best_score = readiness_df['Total_Score'].max()
+            print(f"  🏆 Best Model: {best_model} (Score: {best_score:.2f}/25.0)")
+            print()
 
             # Store for dataset readiness
             stored_models_dict = models_dict
@@ -1074,29 +1283,89 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     **metrics
                 })
                 
+                # Display metrics
+                print(f"      ✅ {model_name} Metrics:")
+                if detected_task_type == 'Regression':
+                    print(f"         R² Score:              {metrics['R2']:.4f}")
+                    print(f"         MAE:                   {metrics['MAE']:.4f}")
+                    print(f"         RMSE:                  {metrics['RMSE']:.4f}")
+                    print(f"         MAPE:                  {metrics['MAPE']:.2f}%")
+                    print(f"         Regression Accuracy:   {metrics['Regression_Accuracy']:.4f}")
+                else:
+                    print(f"         Classification Accuracy: {metrics['Classification_Accuracy']:.4f}")
+                    print(f"         F1 Score:              {metrics['F1_Score']:.4f}")
+                
             except Exception as e:
                 print(f"    ⚠️ Error training {model_name}: {e}")
                 continue
 
-        # SHAP Analysis
+        # SHAP Analysis with Visualizations
         print(f"  📊 Running SHAP Analysis...")
         try:
             import shap
+            shap.initjs()  # Initialize JS visualization
+            
             for model_name, model in models_dict.items():
                 try:
+                    print(f"    Analyzing {model_name}...")
                     explainer = shap.TreeExplainer(model)
-                    shap_values = explainer.shap_values(X_test[:100])
+                    
+                    # Use more samples for better analysis (up to 200)
+                    n_samples = min(200, len(X_test))
+                    X_test_sample = X_test[:n_samples]
+                    
+                    shap_values = explainer.shap_values(X_test_sample)
+                    
+                    # Handle multi-class classification
+                    if isinstance(shap_values, list):
+                        shap_values = shap_values[0]  # Use first class for multi-class
+                    
+                    # Calculate mean absolute SHAP values
+                    mean_abs_shap = np.abs(shap_values).mean(0)
+                    
+                    # Create feature importance dictionary
+                    importance_dict = dict(zip(feature_names, mean_abs_shap))
+                    
+                    # Sort by importance
+                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                    
                     shap_results_dict[model_name] = {
                         'success': True,
                         'shap_values': shap_values,
-                        'importance': dict(zip(feature_names, np.abs(shap_values).mean(0)))
+                        'importance': importance_dict,
+                        'mean_abs_shap': mean_abs_shap,
+                        'sorted_features': sorted_features
                     }
-                except:
-                    shap_results_dict[model_name] = {'success': False, 'importance': {}}
+                    
+                    # Create visualization for top 20 features
+                    print(f"      📈 Creating SHAP visualization for {model_name}...")
+                    top_n = min(20, len(sorted_features))
+                    top_features = sorted_features[:top_n]
+                    
+                    feature_names_plot = [f[0] for f in top_features]
+                    shap_values_plot = [f[1] for f in top_features]
+                    
+                    plt.figure(figsize=(10, 8))
+                    plt.barh(range(len(feature_names_plot)), shap_values_plot)
+                    plt.yticks(range(len(feature_names_plot)), feature_names_plot)
+                    plt.xlabel('Mean |SHAP Value|', fontsize=12)
+                    plt.title(f'Top {top_n} SHAP Feature Importance - {model_name}', fontsize=14, fontweight='bold')
+                    plt.gca().invert_yaxis()
+                    plt.tight_layout()
+                    plt.show()
+                    
+                    # Print top features
+                    print(f"      Top 10 Features for {model_name}:")
+                    for i, (feat, val) in enumerate(top_features[:10], 1):
+                        print(f"        {i:2d}. {feat:30s}: {val:.4f}")
+                    
+                except Exception as e:
+                    print(f"      ⚠️ SHAP analysis failed for {model_name}: {e}")
+                    shap_results_dict[model_name] = {'success': False, 'importance': {}, 'mean_abs_shap': np.array([])}
         except ImportError:
             print(f"    ⚠️ SHAP not available, skipping SHAP analysis")
             for model_name in models_dict.keys():
-                shap_results_dict[model_name] = {'success': False, 'importance': {}}
+                shap_results_dict[model_name] = {'success': False, 'importance': {}, 'mean_abs_shap': np.array([])}
 
         # Fairness Analysis (without synthetic groups)
         print(f"  ⚖️ Running Fairness Analysis...")
@@ -1124,10 +1393,16 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                 interpretability = calculate_interpretability(model_name, shap_success, feature_imp_available)
                 
                 fairness_row = fairness_df[fairness_df['Model'] == model_name]
-                if not fairness_row.empty and 'Disparity' in fairness_row.columns:
-                    disparity = fairness_row['Disparity'].iloc[0]
-                    max_disparity = fairness_df['Disparity'].max() if len(fairness_df) > 0 else disparity * 2 if not np.isnan(disparity) else 1.0
-                    fairness_score = calculate_fairness_from_disparity(disparity, max_disparity)
+                if not fairness_row.empty:
+                    # Check if Individual Fairness Score is available
+                    if 'Individual_Fairness_Score' in fairness_row.columns:
+                        fairness_score = fairness_row['Individual_Fairness_Score'].iloc[0]
+                    elif 'Disparity' in fairness_row.columns:
+                        disparity = fairness_row['Disparity'].iloc[0]
+                        max_disparity = fairness_df['Disparity'].max() if len(fairness_df) > 0 else disparity * 2 if not np.isnan(disparity) else 1.0
+                        fairness_score = calculate_fairness_from_disparity(disparity, max_disparity)
+                    else:
+                        fairness_score = 2.5
                 else:
                     fairness_score = 2.5
                 
@@ -1151,6 +1426,20 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
         
         readiness_df = pd.DataFrame(readiness_list)
         all_results['readiness'].append(readiness_df)
+        
+        # Display Readiness Index
+        print(f"\n  📊 Readiness Index:")
+        print("=" * 80)
+        print(f"{'Model':<20} {'Interpretability':<18} {'Fairness':<12} {'Scalability':<14} {'Accuracy':<12} {'Data Quality':<14} {'Total Score':<12}")
+        print("=" * 80)
+        for _, row in readiness_df.iterrows():
+            print(f"{row['Model']:<20} {row['Interpretability']:<18.2f} {row['Fairness']:<12.2f} "
+                  f"{row['Scalability']:<14.2f} {row['Accuracy']:<12.2f} {row['Data_Quality']:<14.2f} {row['Total_Score']:<12.2f}")
+        print("=" * 80)
+        best_model = readiness_df.loc[readiness_df['Total_Score'].idxmax(), 'Model']
+        best_score = readiness_df['Total_Score'].max()
+        print(f"  🏆 Best Model: {best_model} (Score: {best_score:.2f}/25.0)")
+        print()
 
         # Store for dataset readiness
         stored_models_dict = models_dict
@@ -1228,8 +1517,104 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
         print(f"  ⚠️ compute_dataset_readiness_score function not found: {e}")
         dataset_readiness = None
 
+    # ============================================================================
+    # COMPREHENSIVE RESULTS SUMMARY
+    # ============================================================================
+    print("\n" + "="*80)
+    print("📋 OVERALL RESULTS SUMMARY")
     print("="*80)
-    print("✅ PIPELINE COMPLETE")
+    
+    # Combine all metrics
+    if all_results['metrics']:
+        metrics_df = pd.DataFrame(all_results['metrics'])
+        print("\n📊 ACCURACY METRICS:")
+        print("="*80)
+        if stored_task_type == 'Regression':
+            print(f"{'Model':<20} {'R² Score':<12} {'MAE':<12} {'RMSE':<12} {'MAPE':<12} {'Accuracy':<12}")
+            print("="*80)
+            for _, row in metrics_df.iterrows():
+                print(f"{row['Model']:<20} {row.get('R2', 0):<12.4f} {row.get('MAE', 0):<12.4f} "
+                      f"{row.get('RMSE', 0):<12.4f} {row.get('MAPE', 0):<12.2f} {row.get('Regression_Accuracy', 0):<12.4f}")
+        else:
+            print(f"{'Model':<20} {'Accuracy':<12} {'F1 Score':<12}")
+            print("="*80)
+            for _, row in metrics_df.iterrows():
+                print(f"{row['Model']:<20} {row.get('Classification_Accuracy', 0):<12.4f} {row.get('F1_Score', 0):<12.4f}")
+        print("="*80)
+        
+        # Best model by accuracy
+        if stored_task_type == 'Regression':
+            best_acc_model = metrics_df.loc[metrics_df['R2'].idxmax(), 'Model']
+            best_acc_value = metrics_df['R2'].max()
+            print(f"🏆 Best Model (R²): {best_acc_model} (R² = {best_acc_value:.4f})")
+        else:
+            best_acc_model = metrics_df.loc[metrics_df['Classification_Accuracy'].idxmax(), 'Model']
+            best_acc_value = metrics_df['Classification_Accuracy'].max()
+            print(f"🏆 Best Model (Accuracy): {best_acc_model} (Accuracy = {best_acc_value:.4f})")
+    
+    # Fairness Summary
+    if all_results['fairness']:
+        fairness_df_all = pd.concat(all_results['fairness'], ignore_index=True)
+        print("\n⚖️ FAIRNESS ANALYSIS:")
+        print("="*80)
+        if 'Fairness_Method' in fairness_df_all.columns:
+            print(f"{'Model':<20} {'Method':<25} {'Disparity':<12} {'Fairness Score':<15}")
+            print("="*80)
+            for _, row in fairness_df_all.iterrows():
+                method = row.get('Fairness_Method', 'Unknown')
+                if method == 'Individual_Fairness':
+                    fairness_score = row.get('Individual_Fairness_Score', np.nan)
+                    print(f"{row['Model']:<20} {method:<25} {row.get('Disparity', np.nan):<12.4f} {fairness_score:<15.2f}")
+                else:
+                    print(f"{row['Model']:<20} {method:<25} {row.get('Disparity', np.nan):<12.4f} {'N/A':<15}")
+        else:
+            print(f"{'Model':<20} {'Disparity':<12}")
+            print("="*80)
+            for _, row in fairness_df_all.iterrows():
+                print(f"{row['Model']:<20} {row.get('Disparity', np.nan):<12.4f}")
+        print("="*80)
+    
+    # Readiness Summary
+    if all_results['readiness']:
+        readiness_df_all = pd.concat(all_results['readiness'], ignore_index=True)
+        print("\n📈 READINESS INDEX:")
+        print("="*80)
+        print(f"{'Model':<20} {'Total Score':<15} {'Accuracy':<12} {'Fairness':<12} {'Interpretability':<18} {'Scalability':<14}")
+        print("="*80)
+        for _, row in readiness_df_all.iterrows():
+            print(f"{row['Model']:<20} {row['Total_Score']:<15.2f} {row['Accuracy']:<12.2f} "
+                  f"{row['Fairness']:<12.2f} {row['Interpretability']:<18.2f} {row['Scalability']:<14.2f}")
+        print("="*80)
+        best_readiness_model = readiness_df_all.loc[readiness_df_all['Total_Score'].idxmax(), 'Model']
+        best_readiness_score = readiness_df_all['Total_Score'].max()
+        print(f"🏆 Best Model (Readiness): {best_readiness_model} (Score: {best_readiness_score:.2f}/25.0)")
+    
+    # SHAP Summary
+    if stored_shap_results_dict:
+        print("\n📊 SHAP FEATURE IMPORTANCE SUMMARY:")
+        print("="*80)
+        for model_name, shap_data in stored_shap_results_dict.items():
+            if shap_data.get('success', False) and 'sorted_features' in shap_data:
+                sorted_features = shap_data['sorted_features']
+                print(f"\n  {model_name} - Top 5 Features:")
+                for i, (feat, val) in enumerate(sorted_features[:5], 1):
+                    print(f"    {i}. {feat:30s}: {val:.4f}")
+        print("="*80)
+    
+    # Dataset Readiness
+    if dataset_readiness:
+        print("\n🌐 DATASET READINESS SCORE:")
+        print("="*80)
+        print(f"  Overall Score: {dataset_readiness['readiness_score']:.2f}/25.0")
+        print(f"  - Data Quality:     {dataset_readiness['breakdown']['data_quality']:.2f}/5.0")
+        print(f"  - Accuracy:         {dataset_readiness['breakdown']['accuracy']:.2f}/5.0")
+        print(f"  - Interpretability: {dataset_readiness['breakdown']['interpretability']:.2f}/5.0")
+        print(f"  - Fairness:         {dataset_readiness['breakdown']['fairness']:.2f}/5.0")
+        print(f"  - Scalability:      {dataset_readiness['breakdown']['scalability']:.2f}/5.0")
+        print("="*80)
+    
+    print("\n" + "="*80)
+    print("✅ PIPELINE COMPLETE - ALL RESULTS DISPLAYED ABOVE")
     print("="*80)
 
     return {
