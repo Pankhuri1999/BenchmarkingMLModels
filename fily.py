@@ -1106,53 +1106,53 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
             print(f"  📊 Running SHAP Analysis...")
             
             def get_feature_importance_fallback(model, model_name, feature_names):
-            """Get feature importance from model itself when SHAP fails."""
-            try:
-                # Try to use model's feature names if available (most accurate)
-                if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
-                    model_feature_names = list(model.feature_names_in_)
-                    print(f"        ℹ️ Using model's feature names (from feature_names_in_)")
-                    feature_names_to_use = model_feature_names
-                else:
-                    feature_names_to_use = feature_names
-                
-                # For tree-based models
-                if hasattr(model, 'feature_importances_'):
-                    importances = model.feature_importances_
-                    
-                    # Verify length matches
-                    if len(feature_names_to_use) != len(importances):
-                        print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match importances ({len(importances)})")
-                        feature_names_to_use = [f'feature_{i}' for i in range(len(importances))]
-                    
-                    importance_dict = dict(zip(feature_names_to_use, importances))
-                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                    return importance_dict, sorted_features, 'Model_Feature_Importance'
-                
-                # For linear models (LogisticRegression, Ridge)
-                elif hasattr(model, 'coef_'):
-                    coef = model.coef_
-                    # Handle multi-class (coef_ is 2D)
-                    if coef.ndim > 1:
-                        coef = np.abs(coef).mean(axis=0)  # Average across classes
+                """Get feature importance from model itself when SHAP fails."""
+                try:
+                    # Try to use model's feature names if available (most accurate)
+                    if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
+                        model_feature_names = list(model.feature_names_in_)
+                        print(f"        ℹ️ Using model's feature names (from feature_names_in_)")
+                        feature_names_to_use = model_feature_names
                     else:
-                        coef = np.abs(coef)
+                        feature_names_to_use = feature_names
                     
-                    # Verify feature_names length matches
-                    if len(feature_names_to_use) != len(coef):
-                        print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match coefficients ({len(coef)})")
-                        # Create generic names if mismatch
-                        feature_names_to_use = [f'feature_{i}' for i in range(len(coef))]
+                    # For tree-based models
+                    if hasattr(model, 'feature_importances_'):
+                        importances = model.feature_importances_
+                        
+                        # Verify length matches
+                        if len(feature_names_to_use) != len(importances):
+                            print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match importances ({len(importances)})")
+                            feature_names_to_use = [f'feature_{i}' for i in range(len(importances))]
+                        
+                        importance_dict = dict(zip(feature_names_to_use, importances))
+                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                        return importance_dict, sorted_features, 'Model_Feature_Importance'
                     
-                    importance_dict = dict(zip(feature_names_to_use, coef))
-                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                    return importance_dict, sorted_features, 'Model_Coefficient_Importance'
-                
-                else:
+                    # For linear models (LogisticRegression, Ridge)
+                    elif hasattr(model, 'coef_'):
+                        coef = model.coef_
+                        # Handle multi-class (coef_ is 2D)
+                        if coef.ndim > 1:
+                            coef = np.abs(coef).mean(axis=0)  # Average across classes
+                        else:
+                            coef = np.abs(coef)
+                        
+                        # Verify feature_names length matches
+                        if len(feature_names_to_use) != len(coef):
+                            print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match coefficients ({len(coef)})")
+                            # Create generic names if mismatch
+                            feature_names_to_use = [f'feature_{i}' for i in range(len(coef))]
+                        
+                        importance_dict = dict(zip(feature_names_to_use, coef))
+                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                        return importance_dict, sorted_features, 'Model_Coefficient_Importance'
+                    
+                    else:
+                        return {}, [], 'No_Importance_Available'
+                except Exception as e:
+                    print(f"        ⚠️ Fallback feature importance failed: {e}")
                     return {}, [], 'No_Importance_Available'
-            except Exception as e:
-                print(f"        ⚠️ Fallback feature importance failed: {e}")
-                return {}, [], 'No_Importance_Available'
             
             for model_name, model in models_dict.items():
                 try:
@@ -1503,54 +1503,54 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
         # SHAP Analysis with Visualizations (with fallback to model feature importance)
         print(f"  📊 Running SHAP Analysis...")
         
-            def get_feature_importance_fallback(model, model_name, feature_names):
-                """Get feature importance from model itself when SHAP fails."""
-                try:
-                    # Try to use model's feature names if available (most accurate)
-                    if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
-                        model_feature_names = list(model.feature_names_in_)
-                        print(f"        ℹ️ Using model's feature names (from feature_names_in_)")
-                        feature_names_to_use = model_feature_names
+        def get_feature_importance_fallback(model, model_name, feature_names):
+            """Get feature importance from model itself when SHAP fails."""
+            try:
+                # Try to use model's feature names if available (most accurate)
+                if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
+                    model_feature_names = list(model.feature_names_in_)
+                    print(f"        ℹ️ Using model's feature names (from feature_names_in_)")
+                    feature_names_to_use = model_feature_names
+                else:
+                    feature_names_to_use = feature_names
+                
+                # For tree-based models
+                if hasattr(model, 'feature_importances_'):
+                    importances = model.feature_importances_
+                    
+                    # Verify length matches
+                    if len(feature_names_to_use) != len(importances):
+                        print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match importances ({len(importances)})")
+                        feature_names_to_use = [f'feature_{i}' for i in range(len(importances))]
+                    
+                    importance_dict = dict(zip(feature_names_to_use, importances))
+                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                    return importance_dict, sorted_features, 'Model_Feature_Importance'
+                
+                # For linear models (LogisticRegression, Ridge)
+                elif hasattr(model, 'coef_'):
+                    coef = model.coef_
+                    # Handle multi-class (coef_ is 2D)
+                    if coef.ndim > 1:
+                        coef = np.abs(coef).mean(axis=0)  # Average across classes
                     else:
-                        feature_names_to_use = feature_names
+                        coef = np.abs(coef)
                     
-                    # For tree-based models
-                    if hasattr(model, 'feature_importances_'):
-                        importances = model.feature_importances_
-                        
-                        # Verify length matches
-                        if len(feature_names_to_use) != len(importances):
-                            print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match importances ({len(importances)})")
-                            feature_names_to_use = [f'feature_{i}' for i in range(len(importances))]
-                        
-                        importance_dict = dict(zip(feature_names_to_use, importances))
-                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                        return importance_dict, sorted_features, 'Model_Feature_Importance'
+                    # Verify feature_names length matches
+                    if len(feature_names_to_use) != len(coef):
+                        print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match coefficients ({len(coef)})")
+                        # Create generic names if mismatch
+                        feature_names_to_use = [f'feature_{i}' for i in range(len(coef))]
                     
-                    # For linear models (LogisticRegression, Ridge)
-                    elif hasattr(model, 'coef_'):
-                        coef = model.coef_
-                        # Handle multi-class (coef_ is 2D)
-                        if coef.ndim > 1:
-                            coef = np.abs(coef).mean(axis=0)  # Average across classes
-                        else:
-                            coef = np.abs(coef)
-                        
-                        # Verify feature_names length matches
-                        if len(feature_names_to_use) != len(coef):
-                            print(f"        ⚠️ Feature names count ({len(feature_names_to_use)}) doesn't match coefficients ({len(coef)})")
-                            # Create generic names if mismatch
-                            feature_names_to_use = [f'feature_{i}' for i in range(len(coef))]
-                        
-                        importance_dict = dict(zip(feature_names_to_use, coef))
-                        sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
-                        return importance_dict, sorted_features, 'Model_Coefficient_Importance'
-                    
-                    else:
-                        return {}, [], 'No_Importance_Available'
-                except Exception as e:
-                    print(f"        ⚠️ Fallback feature importance failed: {e}")
+                    importance_dict = dict(zip(feature_names_to_use, coef))
+                    sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
+                    return importance_dict, sorted_features, 'Model_Coefficient_Importance'
+                
+                else:
                     return {}, [], 'No_Importance_Available'
+            except Exception as e:
+                print(f"        ⚠️ Fallback feature importance failed: {e}")
+                return {}, [], 'No_Importance_Available'
         
         for model_name, model in models_dict.items():
             try:
