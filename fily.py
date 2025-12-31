@@ -1675,17 +1675,17 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
         print(f"  🏆 Best Model: {best_model} (Score: {best_score:.2f}/25.0)")
         print()
 
-            # Store for dataset readiness
-            stored_models_dict = models_dict
-            stored_X_train = X_train
-            stored_X_test = X_test
-            stored_y_train = y_train
-            stored_y_test = y_test
-            stored_feature_names = feature_names
-            stored_task_type = detected_task_type
-            stored_metrics_dict = metrics_dict
-            stored_shap_results_dict = shap_results_dict
-            stored_fairness_results = fairness_df
+        # Store for dataset readiness
+        stored_models_dict = models_dict
+        stored_X_train = X_train
+        stored_X_test = X_test
+        stored_y_train = y_train
+        stored_y_test = y_test
+        stored_feature_names = feature_names
+        stored_task_type = detected_task_type
+        stored_metrics_dict = metrics_dict
+        stored_shap_results_dict = shap_results_dict
+        stored_fairness_results = fairness_df
 
     else:
         # Single target
@@ -1733,27 +1733,27 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                 predictions_dict[model_name] = y_pred
                 models_dict[model_name] = best_model
                 
-                    # Calculate metrics
-                    if detected_task_type == 'Regression':
-                        mape = np.mean(np.abs((y_test - y_pred) / (np.abs(y_test) + 1e-8))) * 100
-                        # Use R2 as the accuracy metric for regression (standard practice)
-                        # R2 ranges from -∞ to 1, but we'll use it directly
-                        # For display, we can also calculate a bounded accuracy metric
-                        r2 = r2_score(y_test, y_pred)
-                        # Bounded accuracy: use R2 if positive, otherwise use a MAPE-based metric (bounded to 0-1)
-                        if r2 >= 0:
-                            regression_accuracy = r2
-                        else:
-                            # If R2 is negative, use MAPE-based accuracy (bounded to 0-1)
-                            regression_accuracy = max(0, min(1, 1 - mape / 100))
-                        
-                        metrics = {
-                            'R2': r2,
-                            'MAE': mean_absolute_error(y_test, y_pred),
-                            'RMSE': np.sqrt(mean_squared_error(y_test, y_pred)),
-                            'MAPE': mape,
-                            'Regression_Accuracy': regression_accuracy
-                        }
+                # Calculate metrics
+                if detected_task_type == 'Regression':
+                    mape = np.mean(np.abs((y_test - y_pred) / (np.abs(y_test) + 1e-8))) * 100
+                    # Use R2 as the accuracy metric for regression (standard practice)
+                    # R2 ranges from -∞ to 1, but we'll use it directly
+                    # For display, we can also calculate a bounded accuracy metric
+                    r2 = r2_score(y_test, y_pred)
+                    # Bounded accuracy: use R2 if positive, otherwise use a MAPE-based metric (bounded to 0-1)
+                    if r2 >= 0:
+                        regression_accuracy = r2
+                    else:
+                        # If R2 is negative, use MAPE-based accuracy (bounded to 0-1)
+                        regression_accuracy = max(0, min(1, 1 - mape / 100))
+                    
+                    metrics = {
+                        'R2': r2,
+                        'MAE': mean_absolute_error(y_test, y_pred),
+                        'RMSE': np.sqrt(mean_squared_error(y_test, y_pred)),
+                        'MAPE': mape,
+                        'Regression_Accuracy': regression_accuracy
+                    }
                 else:
                     metrics = {
                         'Classification_Accuracy': accuracy_score(y_test, y_pred),
