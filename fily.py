@@ -144,14 +144,8 @@ def preprocess_data(X, y, task_type='auto', use_tfidf=True, max_tfidf_features=1
             except AttributeError:
                 # Fallback for older sklearn versions
                 tfidf_feature_names = tfidf.get_feature_names()
-            # Use actual feature names (words/ngrams) instead of tfidf_0, tfidf_1, etc.
-            # Only add prefix if multiple text columns, otherwise use names directly
-            if len(text_cols) == 1:
-                # Single text column - use feature names directly
-                feature_names.extend(tfidf_feature_names)
-            else:
-                # Multiple text columns - add a simple prefix
-                feature_names.extend([f'TFIDF_{name}' for name in tfidf_feature_names])
+            # Use actual feature names (words/ngrams) directly - no prefix
+            feature_names.extend(tfidf_feature_names)
         except Exception as e:
             print(f"    ⚠️ TF-IDF processing failed: {e}")
             X_text_train_tfidf = None
