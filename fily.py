@@ -1363,8 +1363,25 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                             print(f"      Using coefficient importance instead...")
                             raise ValueError("Feature count mismatch")
                         
+                        # Use DataFrame column names if available (most reliable for LightGBM)
+                        if isinstance(X_test_sample_df, pd.DataFrame):
+                            df_feature_names = list(X_test_sample_df.columns)
+                            # Check if column names are generic (like "column_1", "0", etc.)
+                            is_generic = any(
+                                str(name).startswith('column_') or 
+                                str(name).startswith('feature_') or 
+                                (str(name).isdigit() and len(str(name)) <= 3)
+                                for name in df_feature_names[:10]  # Check first 10
+                            )
+                            if len(df_feature_names) == len(mean_abs_shap) and not is_generic:
+                                feature_names_to_use = df_feature_names
+                            elif len(feature_names) == len(mean_abs_shap):
+                                # Use provided feature_names if DataFrame has generic names
+                                feature_names_to_use = feature_names
+                            else:
+                                feature_names_to_use = df_feature_names
                         # Use model's feature names if available (sklearn 1.0+)
-                        if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
+                        elif hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
                             model_feature_names = list(model.feature_names_in_)
                             if len(model_feature_names) == len(mean_abs_shap):
                                 print(f"      ℹ️ Using model's feature names (from feature_names_in_)")
@@ -1374,17 +1391,54 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         else:
                             feature_names_to_use = feature_names
                         
-                        # Verify feature_names are valid (not categorical values like 'low', 'high', 'yes')
-                        # Feature names should be column names or TF-IDF terms, not categorical values
-                        invalid_keywords = ['low', 'high', 'yes', 'no', 'true', 'false', 'medium', 'small', 'large']
-                        invalid_names = [name for name in feature_names_to_use if any(kw in str(name).lower() for kw in invalid_keywords) and len(str(name)) < 10]
-                        if invalid_names and model_name == 'LogisticRegression':
-                            print(f"      ⚠️ Detected potentially invalid feature names: {invalid_names[:5]}")
-                            print(f"      First 10 feature names: {feature_names_to_use[:10]}")
-                            # Don't raise error, just warn - might be legitimate feature names
+                        # Aggregate related features (e.g., enrollment across years, year-based features)
+                        # Group features that match patterns like "Enrollment_*", "*_2016", "*_2017", etc.
+                        aggregated_importance = {}
+                        feature_groups = {}
                         
-                        # Create feature importance dictionary
-                        importance_dict = dict(zip(feature_names_to_use, mean_abs_shap))
+                        # Find feature groups (e.g., all enrollment-related, all year-based)
+                        for i, feat_name in enumerate(feature_names_to_use):
+                            feat_str = str(feat_name)
+                            # Check for enrollment patterns
+                            if 'enrollment' in feat_str.lower():
+                                base_name = 'Enrollment'
+                                if base_name not in feature_groups:
+                                    feature_groups[base_name] = []
+                                feature_groups[base_name].append((i, mean_abs_shap[i]))
+                            # Check for year patterns (e.g., "*_2016", "*_2017", "2016_*", etc.)
+                            elif any(year in feat_str for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026']):
+                                # Extract base feature name (remove year suffix)
+                                base_name = feat_str
+                                for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026']:
+                                    if year in base_name:
+                                        base_name = base_name.replace(year, '')
+                                        break
+                                # Also check for year prefix
+                                for year in ['2016_', '2017_', '2018_', '2019_', '2020_', '2021_', '2022_', '2023_', '2024_', '2025_', '2026_']:
+                                    if base_name.startswith(year):
+                                        base_name = base_name.replace(year, '', 1)
+                                        break
+                                if base_name:
+                                    if base_name not in feature_groups:
+                                        feature_groups[base_name] = []
+                                    feature_groups[base_name].append((i, mean_abs_shap[i]))
+                            else:
+                                # Individual feature, no aggregation
+                                aggregated_importance[feat_name] = mean_abs_shap[i]
+                        
+                        # Aggregate grouped features (sum their SHAP values)
+                        for group_name, group_features in feature_groups.items():
+                            if len(group_features) > 1:
+                                # Sum SHAP values for all features in the group
+                                total_importance = sum(shap_val for _, shap_val in group_features)
+                                aggregated_importance[group_name] = total_importance
+                            else:
+                                # Only one feature in group, use original name
+                                idx, shap_val = group_features[0]
+                                aggregated_importance[feature_names_to_use[idx]] = shap_val
+                        
+                        # Create feature importance dictionary with aggregated features
+                        importance_dict = aggregated_importance
                         sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
                         method_used = 'SHAP'
                         shap_success = True
@@ -1775,8 +1829,25 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         print(f"      Using coefficient importance instead...")
                         raise ValueError("Feature count mismatch")
                     
+                    # Use DataFrame column names if available (most reliable for LightGBM)
+                    if isinstance(X_test_sample_df, pd.DataFrame):
+                        df_feature_names = list(X_test_sample_df.columns)
+                        # Check if column names are generic (like "column_1", "0", etc.)
+                        is_generic = any(
+                            str(name).startswith('column_') or 
+                            str(name).startswith('feature_') or 
+                            (str(name).isdigit() and len(str(name)) <= 3)
+                            for name in df_feature_names[:10]  # Check first 10
+                        )
+                        if len(df_feature_names) == len(mean_abs_shap) and not is_generic:
+                            feature_names_to_use = df_feature_names
+                        elif len(feature_names) == len(mean_abs_shap):
+                            # Use provided feature_names if DataFrame has generic names
+                            feature_names_to_use = feature_names
+                        else:
+                            feature_names_to_use = df_feature_names
                     # Use model's feature names if available (sklearn 1.0+)
-                    if hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
+                    elif hasattr(model, 'feature_names_in_') and model.feature_names_in_ is not None:
                         model_feature_names = list(model.feature_names_in_)
                         if len(model_feature_names) == len(mean_abs_shap):
                             print(f"      ℹ️ Using model's feature names (from feature_names_in_)")
@@ -1786,17 +1857,54 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     else:
                         feature_names_to_use = feature_names
                     
-                    # Verify feature_names are valid (not categorical values like 'low', 'high', 'yes')
-                    # Feature names should be column names or TF-IDF terms, not categorical values
-                    invalid_keywords = ['low', 'high', 'yes', 'no', 'true', 'false', 'medium', 'small', 'large']
-                    invalid_names = [name for name in feature_names_to_use if any(kw in str(name).lower() for kw in invalid_keywords) and len(str(name)) < 10]
-                    if invalid_names and model_name == 'LogisticRegression':
-                        print(f"      ⚠️ Detected potentially invalid feature names: {invalid_names[:5]}")
-                        print(f"      First 10 feature names: {feature_names_to_use[:10]}")
-                        # Don't raise error, just warn - might be legitimate feature names
+                    # Aggregate related features (e.g., enrollment across years, year-based features)
+                    # Group features that match patterns like "Enrollment_*", "*_2016", "*_2017", etc.
+                    aggregated_importance = {}
+                    feature_groups = {}
                     
-                    # Create feature importance dictionary
-                    importance_dict = dict(zip(feature_names_to_use, mean_abs_shap))
+                    # Find feature groups (e.g., all enrollment-related, all year-based)
+                    for i, feat_name in enumerate(feature_names_to_use):
+                        feat_str = str(feat_name)
+                        # Check for enrollment patterns
+                        if 'enrollment' in feat_str.lower():
+                            base_name = 'Enrollment'
+                            if base_name not in feature_groups:
+                                feature_groups[base_name] = []
+                            feature_groups[base_name].append((i, mean_abs_shap[i]))
+                        # Check for year patterns (e.g., "*_2016", "*_2017", "2016_*", etc.)
+                        elif any(year in feat_str for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026']):
+                            # Extract base feature name (remove year suffix)
+                            base_name = feat_str
+                            for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026']:
+                                if year in base_name:
+                                    base_name = base_name.replace(year, '')
+                                    break
+                            # Also check for year prefix
+                            for year in ['2016_', '2017_', '2018_', '2019_', '2020_', '2021_', '2022_', '2023_', '2024_', '2025_', '2026_']:
+                                if base_name.startswith(year):
+                                    base_name = base_name.replace(year, '', 1)
+                                    break
+                            if base_name:
+                                if base_name not in feature_groups:
+                                    feature_groups[base_name] = []
+                                feature_groups[base_name].append((i, mean_abs_shap[i]))
+                        else:
+                            # Individual feature, no aggregation
+                            aggregated_importance[feat_name] = mean_abs_shap[i]
+                    
+                    # Aggregate grouped features (sum their SHAP values)
+                    for group_name, group_features in feature_groups.items():
+                        if len(group_features) > 1:
+                            # Sum SHAP values for all features in the group
+                            total_importance = sum(shap_val for _, shap_val in group_features)
+                            aggregated_importance[group_name] = total_importance
+                        else:
+                            # Only one feature in group, use original name
+                            idx, shap_val = group_features[0]
+                            aggregated_importance[feature_names_to_use[idx]] = shap_val
+                    
+                    # Create feature importance dictionary with aggregated features
+                    importance_dict = aggregated_importance
                     sorted_features = sorted(importance_dict.items(), key=lambda x: x[1], reverse=True)
                     method_used = 'SHAP'
                     shap_success = True
