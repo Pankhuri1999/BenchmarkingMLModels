@@ -43,7 +43,14 @@ import xgboost as xgb
 import lightgbm as lgb
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+# Don't force backend - let matplotlib auto-detect (works in Jupyter and regular Python)
+# If in Jupyter, user should run: %matplotlib inline
+# If graphs don't show, we'll use display() as fallback
+try:
+    from IPython.display import display
+    IPYTHON_AVAILABLE = True
+except ImportError:
+    IPYTHON_AVAILABLE = False
 
 # Try to import psutil (optional)
 try:
@@ -1178,17 +1185,33 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         feature_names_plot = [f[0] for f in top_features]
                         importance_values_plot = [f[1] for f in top_features]
                         
-                        plt.figure(figsize=(10, 8))
-                        colors = plt.cm.viridis(np.linspace(0, 1, len(feature_names_plot)))
-                        plt.barh(range(len(feature_names_plot)), importance_values_plot, color=colors)
-                        plt.yticks(range(len(feature_names_plot)), feature_names_plot)
-                        plt.xlabel('Feature Importance', fontsize=12)
-                        plt.title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
-                                fontsize=14, fontweight='bold')
-                        plt.gca().invert_yaxis()
-                        plt.grid(axis='x', alpha=0.3)
-                        plt.tight_layout()
-                        plt.show()
+                        try:
+                            # Create figure
+                            fig, ax = plt.subplots(figsize=(10, 8))
+                            colors = plt.cm.viridis(np.linspace(0, 1, len(feature_names_plot)))
+                            ax.barh(range(len(feature_names_plot)), importance_values_plot, color=colors)
+                            ax.set_yticks(range(len(feature_names_plot)))
+                            ax.set_yticklabels(feature_names_plot)
+                            ax.set_xlabel('Feature Importance', fontsize=12)
+                            ax.set_title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
+                                    fontsize=14, fontweight='bold')
+                            ax.invert_yaxis()
+                            ax.grid(axis='x', alpha=0.3)
+                            plt.tight_layout()
+                            
+                            # Display graph - works in both Jupyter and regular Python
+                            if IPYTHON_AVAILABLE:
+                                display(fig)  # Better for Jupyter
+                            else:
+                                plt.show()  # For regular Python
+                            print(f"      ✅ Graph displayed for {model_name}")
+                        except Exception as e:
+                            print(f"      ⚠️ Error displaying graph for {model_name}: {e}")
+                            # Try alternative display method
+                            try:
+                                plt.show()
+                            except:
+                                pass
                         
                         # Print top features
                         print(f"      Top 10 Features for {model_name} ({method_used}):")
@@ -1482,17 +1505,33 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     feature_names_plot = [f[0] for f in top_features]
                     importance_values_plot = [f[1] for f in top_features]
                     
-                    plt.figure(figsize=(10, 8))
-                    colors = plt.cm.viridis(np.linspace(0, 1, len(feature_names_plot)))
-                    plt.barh(range(len(feature_names_plot)), importance_values_plot, color=colors)
-                    plt.yticks(range(len(feature_names_plot)), feature_names_plot)
-                    plt.xlabel('Feature Importance', fontsize=12)
-                    plt.title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
-                            fontsize=14, fontweight='bold')
-                    plt.gca().invert_yaxis()
-                    plt.grid(axis='x', alpha=0.3)
-                    plt.tight_layout()
-                    plt.show()
+                        try:
+                            # Create figure
+                            fig, ax = plt.subplots(figsize=(10, 8))
+                            colors = plt.cm.viridis(np.linspace(0, 1, len(feature_names_plot)))
+                            ax.barh(range(len(feature_names_plot)), importance_values_plot, color=colors)
+                            ax.set_yticks(range(len(feature_names_plot)))
+                            ax.set_yticklabels(feature_names_plot)
+                            ax.set_xlabel('Feature Importance', fontsize=12)
+                            ax.set_title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
+                                    fontsize=14, fontweight='bold')
+                            ax.invert_yaxis()
+                            ax.grid(axis='x', alpha=0.3)
+                            plt.tight_layout()
+                            
+                            # Display graph - works in both Jupyter and regular Python
+                            if IPYTHON_AVAILABLE:
+                                display(fig)  # Better for Jupyter
+                            else:
+                                plt.show()  # For regular Python
+                            print(f"      ✅ Graph displayed for {model_name}")
+                        except Exception as e:
+                            print(f"      ⚠️ Error displaying graph for {model_name}: {e}")
+                            # Try alternative display method
+                            try:
+                                plt.show()
+                            except:
+                                pass
                     
                     # Print top features
                     print(f"      Top 10 Features for {model_name} ({method_used}):")
