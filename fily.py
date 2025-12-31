@@ -822,17 +822,41 @@ def compute_dataset_readiness_score(
     # Data Quality
     data_quality = compute_data_quality(df, target_columns)
     
-    # Accuracy
+    # Accuracy - use accuracy_score first, then R2 as tiebreaker
     if metrics_dict:
         if task_type == 'Regression':
-            best_r2 = max([m.get('R2', 0) for m in metrics_dict.values() if isinstance(m, dict)])
-            accuracy_score_val = max(0, min(5, 5 * best_r2))
+            # For regression, R2 is the accuracy metric
+            # Sort by R2 first, then use R2 as tiebreaker (same metric, but ensures consistency)
+            best_models = sorted(
+                [(k, v) for k, v in metrics_dict.items() if isinstance(v, dict)],
+                key=lambda x: (x[1].get('R2', 0), x[1].get('R2', 0)),  # R2 as primary and tiebreaker
+                reverse=True
+            )
+            if best_models:
+                best_model_name, best_metrics = best_models[0]
+                best_r2 = best_metrics.get('R2', 0)
+                accuracy_score_val = max(0, min(5, 5 * best_r2))
+            else:
+                best_model_name = None
+                accuracy_score_val = 2.5
         else:
-            best_acc = max([m.get('Classification_Accuracy', 0) for m in metrics_dict.values() if isinstance(m, dict)])
-            accuracy_score_val = max(0, min(5, 5 * best_acc))
+            # For classification, use Classification_Accuracy first, then R2 as tiebreaker
+            best_models = sorted(
+                [(k, v) for k, v in metrics_dict.items() if isinstance(v, dict)],
+                key=lambda x: (x[1].get('Classification_Accuracy', 0), x[1].get('R2', 0)),  # Accuracy first, R2 as tiebreaker
+                reverse=True
+            )
+            if best_models:
+                best_model_name, best_metrics = best_models[0]
+                best_acc = best_metrics.get('Classification_Accuracy', 0)
+                accuracy_score_val = max(0, min(5, 5 * best_acc))
+            else:
+                best_model_name = None
+                accuracy_score_val = 2.5
+        
         accuracy = {
             'score': round(accuracy_score_val, 2),
-            'best_model': max(metrics_dict.keys(), key=lambda k: metrics_dict[k].get('R2' if task_type == 'Regression' else 'Classification_Accuracy', 0)),
+            'best_model': best_model_name,
             'best_metric': accuracy_score_val
         }
     else:
@@ -1191,12 +1215,24 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     
                     # Calculate metrics
                     if detected_task_type == 'Regression':
+                        mape = np.mean(np.abs((y_test - y_pred) / (np.abs(y_test) + 1e-8))) * 100
+                        # Use R2 as the accuracy metric for regression (standard practice)
+                        # R2 ranges from -∞ to 1, but we'll use it directly
+                        # For display, we can also calculate a bounded accuracy metric
+                        r2 = r2_score(y_test, y_pred)
+                        # Bounded accuracy: use R2 if positive, otherwise use a MAPE-based metric (bounded to 0-1)
+                        if r2 >= 0:
+                            regression_accuracy = r2
+                        else:
+                            # If R2 is negative, use MAPE-based accuracy (bounded to 0-1)
+                            regression_accuracy = max(0, min(1, 1 - mape / 100))
+                        
                         metrics = {
-                            'R2': r2_score(y_test, y_pred),
+                            'R2': r2,
                             'MAE': mean_absolute_error(y_test, y_pred),
                             'RMSE': np.sqrt(mean_squared_error(y_test, y_pred)),
-                            'MAPE': np.mean(np.abs((y_test - y_pred) / (y_test + 1e-8))) * 100,
-                            'Regression_Accuracy': 1 - np.mean(np.abs((y_test - y_pred) / (y_test + 1e-8)))
+                            'MAPE': mape,
+                            'Regression_Accuracy': regression_accuracy
                         }
                     else:
                         metrics = {
@@ -1398,23 +1434,46 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                         
                         # Find feature groups (e.g., all enrollment-related, all year-based)
                         for i, feat_name in enumerate(feature_names_to_use):
-                            feat_str = str(feat_name)
+                            feat_str = str(feat_name).strip()
+                            
+                            # Check if feature is a pure year value (4 digits, 1900-2100 range)
+                            if feat_str.isdigit() and len(feat_str) == 4:
+                                year_val = int(feat_str)
+                                if 1900 <= year_val <= 2100:
+                                    # This is a year value, aggregate into "Year"
+                                    base_name = 'Year'
+                                    if base_name not in feature_groups:
+                                        feature_groups[base_name] = []
+                                    feature_groups[base_name].append((i, mean_abs_shap[i]))
+                                    continue
+                            
                             # Check for enrollment patterns
                             if 'enrollment' in feat_str.lower():
                                 base_name = 'Enrollment'
                                 if base_name not in feature_groups:
                                     feature_groups[base_name] = []
                                 feature_groups[base_name].append((i, mean_abs_shap[i]))
-                            # Check for year patterns (e.g., "*_2016", "*_2017", "2016_*", etc.)
-                            elif any(year in feat_str for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026']):
+                            # Check for type patterns (case-insensitive)
+                            elif 'type' in feat_str.lower():
+                                base_name = 'Type'
+                                if base_name not in feature_groups:
+                                    feature_groups[base_name] = []
+                                feature_groups[base_name].append((i, mean_abs_shap[i]))
+                            # Check for year patterns in feature names (e.g., "*_2016", "*_2017", "2016_*", etc.)
+                            elif any(year in feat_str for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026', 
+                                                                   '_2000', '_2001', '_2002', '_2003', '_2004', '_2005', '_2006', '_2007', '_2008', '_2009', '_2010', '_2011', '_2012', '_2013', '_2014', '_2015']):
                                 # Extract base feature name (remove year suffix)
                                 base_name = feat_str
-                                for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026']:
+                                year_suffixes = ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026',
+                                                '_2000', '_2001', '_2002', '_2003', '_2004', '_2005', '_2006', '_2007', '_2008', '_2009', '_2010', '_2011', '_2012', '_2013', '_2014', '_2015']
+                                for year in year_suffixes:
                                     if year in base_name:
                                         base_name = base_name.replace(year, '')
                                         break
                                 # Also check for year prefix
-                                for year in ['2016_', '2017_', '2018_', '2019_', '2020_', '2021_', '2022_', '2023_', '2024_', '2025_', '2026_']:
+                                year_prefixes = ['2016_', '2017_', '2018_', '2019_', '2020_', '2021_', '2022_', '2023_', '2024_', '2025_', '2026_',
+                                               '2000_', '2001_', '2002_', '2003_', '2004_', '2005_', '2006_', '2007_', '2008_', '2009_', '2010_', '2011_', '2012_', '2013_', '2014_', '2015_']
+                                for year in year_prefixes:
                                     if base_name.startswith(year):
                                         base_name = base_name.replace(year, '', 1)
                                         break
@@ -1564,10 +1623,13 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     
                     scalability = calculate_scalability(model_name, dataset_size, True)
                     
-                    if detected_task_type == 'Regression':
-                        accuracy_score_val = max(0, min(5, 5 * metrics.get('R2', 0)))
-                    else:
-                        accuracy_score_val = max(0, min(5, 5 * metrics.get('Classification_Accuracy', 0)))
+                # Use accuracy_score first, then R2 as tiebreaker (already handled in readiness calculation)
+                if detected_task_type == 'Regression':
+                    # For regression, R2 is the accuracy metric
+                    accuracy_score_val = max(0, min(5, 5 * metrics.get('R2', 0)))
+                else:
+                    # For classification, use Classification_Accuracy
+                    accuracy_score_val = max(0, min(5, 5 * metrics.get('Classification_Accuracy', 0)))
                     
                     readiness = {
                         'Model': model_name,
@@ -1593,10 +1655,25 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                 print(f"{row['Model']:<20} {row['Interpretability']:<18.2f} {row['Fairness']:<12.2f} "
                       f"{row['Scalability']:<14.2f} {row['Accuracy']:<12.2f} {row['Data_Quality']:<14.2f} {row['Total_Score']:<12.2f}")
             print("=" * 80)
-            best_model = readiness_df.loc[readiness_df['Total_Score'].idxmax(), 'Model']
-            best_score = readiness_df['Total_Score'].max()
-            print(f"  🏆 Best Model: {best_model} (Score: {best_score:.2f}/25.0)")
-            print()
+        # Best model: first by Total_Score, then by Accuracy, then by R2 (if available)
+        if metrics_dict and len(metrics_dict) > 0:
+            # Check if any model has R2
+            has_r2 = any('R2' in m for m in metrics_dict.values() if isinstance(m, dict))
+            if has_r2:
+                # Add R2 to readiness_df for sorting
+                readiness_df['_r2'] = readiness_df['Model'].apply(
+                    lambda m: metrics_dict.get(m, {}).get('R2', 0) if isinstance(metrics_dict.get(m, {}), dict) else 0
+                )
+                readiness_df_sorted = readiness_df.sort_values(['Total_Score', 'Accuracy', '_r2'], ascending=[False, False, False])
+            else:
+                readiness_df_sorted = readiness_df.sort_values(['Total_Score', 'Accuracy'], ascending=[False, False])
+        else:
+            readiness_df_sorted = readiness_df.sort_values(['Total_Score', 'Accuracy'], ascending=[False, False])
+        
+        best_model = readiness_df_sorted.iloc[0]['Model']
+        best_score = readiness_df_sorted.iloc[0]['Total_Score']
+        print(f"  🏆 Best Model: {best_model} (Score: {best_score:.2f}/25.0)")
+        print()
 
             # Store for dataset readiness
             stored_models_dict = models_dict
@@ -1656,15 +1733,27 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                 predictions_dict[model_name] = y_pred
                 models_dict[model_name] = best_model
                 
-                # Calculate metrics
-                if detected_task_type == 'Regression':
-                    metrics = {
-                        'R2': r2_score(y_test, y_pred),
-                        'MAE': mean_absolute_error(y_test, y_pred),
-                        'RMSE': np.sqrt(mean_squared_error(y_test, y_pred)),
-                        'MAPE': np.mean(np.abs((y_test - y_pred) / (y_test + 1e-8))) * 100,
-                        'Regression_Accuracy': 1 - np.mean(np.abs((y_test - y_pred) / (y_test + 1e-8)))
-                    }
+                    # Calculate metrics
+                    if detected_task_type == 'Regression':
+                        mape = np.mean(np.abs((y_test - y_pred) / (np.abs(y_test) + 1e-8))) * 100
+                        # Use R2 as the accuracy metric for regression (standard practice)
+                        # R2 ranges from -∞ to 1, but we'll use it directly
+                        # For display, we can also calculate a bounded accuracy metric
+                        r2 = r2_score(y_test, y_pred)
+                        # Bounded accuracy: use R2 if positive, otherwise use a MAPE-based metric (bounded to 0-1)
+                        if r2 >= 0:
+                            regression_accuracy = r2
+                        else:
+                            # If R2 is negative, use MAPE-based accuracy (bounded to 0-1)
+                            regression_accuracy = max(0, min(1, 1 - mape / 100))
+                        
+                        metrics = {
+                            'R2': r2,
+                            'MAE': mean_absolute_error(y_test, y_pred),
+                            'RMSE': np.sqrt(mean_squared_error(y_test, y_pred)),
+                            'MAPE': mape,
+                            'Regression_Accuracy': regression_accuracy
+                        }
                 else:
                     metrics = {
                         'Classification_Accuracy': accuracy_score(y_test, y_pred),
@@ -1864,23 +1953,46 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     
                     # Find feature groups (e.g., all enrollment-related, all year-based)
                     for i, feat_name in enumerate(feature_names_to_use):
-                        feat_str = str(feat_name)
+                        feat_str = str(feat_name).strip()
+                        
+                        # Check if feature is a pure year value (4 digits, 1900-2100 range)
+                        if feat_str.isdigit() and len(feat_str) == 4:
+                            year_val = int(feat_str)
+                            if 1900 <= year_val <= 2100:
+                                # This is a year value, aggregate into "Year"
+                                base_name = 'Year'
+                                if base_name not in feature_groups:
+                                    feature_groups[base_name] = []
+                                feature_groups[base_name].append((i, mean_abs_shap[i]))
+                                continue
+                        
                         # Check for enrollment patterns
                         if 'enrollment' in feat_str.lower():
                             base_name = 'Enrollment'
                             if base_name not in feature_groups:
                                 feature_groups[base_name] = []
                             feature_groups[base_name].append((i, mean_abs_shap[i]))
-                        # Check for year patterns (e.g., "*_2016", "*_2017", "2016_*", etc.)
-                        elif any(year in feat_str for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026']):
+                        # Check for type patterns (case-insensitive)
+                        elif 'type' in feat_str.lower():
+                            base_name = 'Type'
+                            if base_name not in feature_groups:
+                                feature_groups[base_name] = []
+                            feature_groups[base_name].append((i, mean_abs_shap[i]))
+                        # Check for year patterns in feature names (e.g., "*_2016", "*_2017", "2016_*", etc.)
+                        elif any(year in feat_str for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026',
+                                                               '_2000', '_2001', '_2002', '_2003', '_2004', '_2005', '_2006', '_2007', '_2008', '_2009', '_2010', '_2011', '_2012', '_2013', '_2014', '_2015']):
                             # Extract base feature name (remove year suffix)
                             base_name = feat_str
-                            for year in ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026']:
+                            year_suffixes = ['_2016', '_2017', '_2018', '_2019', '_2020', '_2021', '_2022', '_2023', '_2024', '_2025', '_2026',
+                                            '_2000', '_2001', '_2002', '_2003', '_2004', '_2005', '_2006', '_2007', '_2008', '_2009', '_2010', '_2011', '_2012', '_2013', '_2014', '_2015']
+                            for year in year_suffixes:
                                 if year in base_name:
                                     base_name = base_name.replace(year, '')
                                     break
                             # Also check for year prefix
-                            for year in ['2016_', '2017_', '2018_', '2019_', '2020_', '2021_', '2022_', '2023_', '2024_', '2025_', '2026_']:
+                            year_prefixes = ['2016_', '2017_', '2018_', '2019_', '2020_', '2021_', '2022_', '2023_', '2024_', '2025_', '2026_',
+                                           '2000_', '2001_', '2002_', '2003_', '2004_', '2005_', '2006_', '2007_', '2008_', '2009_', '2010_', '2011_', '2012_', '2013_', '2014_', '2015_']
+                            for year in year_prefixes:
                                 if base_name.startswith(year):
                                     base_name = base_name.replace(year, '', 1)
                                     break
@@ -2032,9 +2144,12 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                 
                 scalability = calculate_scalability(model_name, dataset_size, True)
                 
+                # Use accuracy_score first, then R2 as tiebreaker (already handled in readiness calculation)
                 if detected_task_type == 'Regression':
+                    # For regression, R2 is the accuracy metric
                     accuracy_score_val = max(0, min(5, 5 * metrics.get('R2', 0)))
                 else:
+                    # For classification, use Classification_Accuracy
                     accuracy_score_val = max(0, min(5, 5 * metrics.get('Classification_Accuracy', 0)))
                 
                 readiness = {
@@ -2060,8 +2175,23 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
             print(f"{row['Model']:<20} {row['Interpretability']:<18.2f} {row['Fairness']:<12.2f} "
                   f"{row['Scalability']:<14.2f} {row['Accuracy']:<12.2f} {row['Data_Quality']:<14.2f} {row['Total_Score']:<12.2f}")
         print("=" * 80)
-        best_model = readiness_df.loc[readiness_df['Total_Score'].idxmax(), 'Model']
-        best_score = readiness_df['Total_Score'].max()
+        # Best model: first by Total_Score, then by Accuracy, then by R2 (if available)
+        if 'R2' in metrics_dict.get(readiness_df.iloc[0]['Model'], {}):
+            # If R2 is available, use it as tiebreaker
+            readiness_df_sorted = readiness_df.sort_values(['Total_Score', 'Accuracy'], ascending=[False, False])
+            # Further sort by R2 if available in metrics
+            for idx, row in readiness_df_sorted.iterrows():
+                model_name = row['Model']
+                if model_name in metrics_dict and 'R2' in metrics_dict[model_name]:
+                    readiness_df_sorted.at[idx, '_r2'] = metrics_dict[model_name]['R2']
+                else:
+                    readiness_df_sorted.at[idx, '_r2'] = 0
+            readiness_df_sorted = readiness_df_sorted.sort_values(['Total_Score', 'Accuracy', '_r2'], ascending=[False, False, False])
+        else:
+            readiness_df_sorted = readiness_df.sort_values(['Total_Score', 'Accuracy'], ascending=[False, False])
+        
+        best_model = readiness_df_sorted.iloc[0]['Model']
+        best_score = readiness_df_sorted.iloc[0]['Total_Score']
         print(f"  🏆 Best Model: {best_model} (Score: {best_score:.2f}/25.0)")
         print()
 
@@ -2166,14 +2296,22 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                 print(f"{row['Model']:<20} {row.get('Classification_Accuracy', 0):<12.4f} {row.get('F1_Score', 0):<12.4f}")
         print("="*80)
         
-        # Best model by accuracy
+        # Best model by accuracy_score first, then R2 as tiebreaker
         if stored_task_type == 'Regression':
-            best_acc_model = metrics_df.loc[metrics_df['R2'].idxmax(), 'Model']
-            best_acc_value = metrics_df['R2'].max()
+            # For regression, use R2 (accuracy metric) first, then MAE as tiebreaker
+            metrics_df_sorted = metrics_df.sort_values(['R2', 'MAE'], ascending=[False, True])
+            best_acc_model = metrics_df_sorted.iloc[0]['Model']
+            best_acc_value = metrics_df_sorted.iloc[0]['R2']
+            best_r2_value = metrics_df_sorted.iloc[0].get('R2', 0)
             print(f"🏆 Best Model (R²): {best_acc_model} (R² = {best_acc_value:.4f})")
         else:
-            best_acc_model = metrics_df.loc[metrics_df['Classification_Accuracy'].idxmax(), 'Model']
-            best_acc_value = metrics_df['Classification_Accuracy'].max()
+            # For classification, use Classification_Accuracy first, then R2 (if available) as tiebreaker
+            if 'R2' in metrics_df.columns:
+                metrics_df_sorted = metrics_df.sort_values(['Classification_Accuracy', 'R2'], ascending=[False, False])
+            else:
+                metrics_df_sorted = metrics_df.sort_values('Classification_Accuracy', ascending=False)
+            best_acc_model = metrics_df_sorted.iloc[0]['Model']
+            best_acc_value = metrics_df_sorted.iloc[0]['Classification_Accuracy']
             print(f"🏆 Best Model (Accuracy): {best_acc_model} (Accuracy = {best_acc_value:.4f})")
     
     # Fairness Summary
@@ -2209,8 +2347,23 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
             print(f"{row['Model']:<20} {row['Total_Score']:<15.2f} {row['Accuracy']:<12.2f} "
                   f"{row['Fairness']:<12.2f} {row['Interpretability']:<18.2f} {row['Scalability']:<14.2f}")
         print("="*80)
-        best_readiness_model = readiness_df_all.loc[readiness_df_all['Total_Score'].idxmax(), 'Model']
-        best_readiness_score = readiness_df_all['Total_Score'].max()
+        # Best model: first by Total_Score, then by Accuracy, then by R2 (if available)
+        if stored_metrics_dict and len(stored_metrics_dict) > 0:
+            # Check if any model has R2
+            has_r2 = any('R2' in m for m in stored_metrics_dict.values() if isinstance(m, dict))
+            if has_r2:
+                # Add R2 to readiness_df_all for sorting
+                readiness_df_all['_r2'] = readiness_df_all['Model'].apply(
+                    lambda m: stored_metrics_dict.get(m, {}).get('R2', 0) if isinstance(stored_metrics_dict.get(m, {}), dict) else 0
+                )
+                readiness_df_sorted = readiness_df_all.sort_values(['Total_Score', 'Accuracy', '_r2'], ascending=[False, False, False])
+            else:
+                readiness_df_sorted = readiness_df_all.sort_values(['Total_Score', 'Accuracy'], ascending=[False, False])
+        else:
+            readiness_df_sorted = readiness_df_all.sort_values(['Total_Score', 'Accuracy'], ascending=[False, False])
+        
+        best_readiness_model = readiness_df_sorted.iloc[0]['Model']
+        best_readiness_score = readiness_df_sorted.iloc[0]['Total_Score']
         print(f"🏆 Best Model (Readiness): {best_readiness_model} (Score: {best_readiness_score:.2f}/25.0)")
     
     # SHAP Summary
