@@ -1192,9 +1192,15 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                             ax.barh(range(len(feature_names_plot)), importance_values_plot, color=colors)
                             ax.set_yticks(range(len(feature_names_plot)))
                             ax.set_yticklabels(feature_names_plot)
-                            ax.set_xlabel('Feature Importance', fontsize=12)
-                            ax.set_title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
-                                    fontsize=14, fontweight='bold')
+                            # Set labels based on method - match the example format
+                            if method_used == 'SHAP':
+                                ax.set_xlabel('Mean |SHAP Value|', fontsize=12)
+                                ax.set_title(f'Top {top_n} SHAP Features - {model_name}', 
+                                        fontsize=14, fontweight='bold')
+                            else:
+                                ax.set_xlabel('Feature Importance', fontsize=12)
+                                ax.set_title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
+                                        fontsize=14, fontweight='bold')
                             ax.invert_yaxis()
                             ax.grid(axis='x', alpha=0.3)
                             plt.tight_layout()
@@ -1505,33 +1511,47 @@ def comprehensive_ml_pipeline(dataset_path, target_column, task_type='auto',
                     feature_names_plot = [f[0] for f in top_features]
                     importance_values_plot = [f[1] for f in top_features]
                     
-                        try:
-                            # Create figure
-                            fig, ax = plt.subplots(figsize=(10, 8))
-                            colors = plt.cm.viridis(np.linspace(0, 1, len(feature_names_plot)))
-                            ax.barh(range(len(feature_names_plot)), importance_values_plot, color=colors)
-                            ax.set_yticks(range(len(feature_names_plot)))
-                            ax.set_yticklabels(feature_names_plot)
-                            ax.set_xlabel('Feature Importance', fontsize=12)
-                            ax.set_title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
+                    try:
+                        # Create figure
+                        fig, ax = plt.subplots(figsize=(10, 8))
+                        colors = plt.cm.viridis(np.linspace(0, 1, len(feature_names_plot)))
+                        ax.barh(range(len(feature_names_plot)), importance_values_plot, color=colors)
+                        ax.set_yticks(range(len(feature_names_plot)))
+                        ax.set_yticklabels(feature_names_plot)
+                        
+                        # Set labels based on method - match the example format
+                        if method_used == 'SHAP':
+                            ax.set_xlabel('Mean |SHAP Value|', fontsize=12)
+                            ax.set_title(f'Top {top_n} SHAP Features - {model_name}', 
                                     fontsize=14, fontweight='bold')
-                            ax.invert_yaxis()
-                            ax.grid(axis='x', alpha=0.3)
-                            plt.tight_layout()
-                            
-                            # Display graph - works in both Jupyter and regular Python
-                            if IPYTHON_AVAILABLE:
-                                display(fig)  # Better for Jupyter
+                        else:
+                            # Set labels based on method - match the example format
+                            if method_used == 'SHAP':
+                                ax.set_xlabel('Mean |SHAP Value|', fontsize=12)
+                                ax.set_title(f'Top {top_n} SHAP Features - {model_name}', 
+                                        fontsize=14, fontweight='bold')
                             else:
-                                plt.show()  # For regular Python
-                            print(f"      ✅ Graph displayed for {model_name}")
-                        except Exception as e:
-                            print(f"      ⚠️ Error displaying graph for {model_name}: {e}")
-                            # Try alternative display method
-                            try:
-                                plt.show()
-                            except:
-                                pass
+                                ax.set_xlabel('Feature Importance', fontsize=12)
+                                ax.set_title(f'Top {top_n} Feature Importance - {model_name}\n(Method: {method_used})', 
+                                        fontsize=14, fontweight='bold')
+                        
+                        ax.invert_yaxis()
+                        ax.grid(axis='x', alpha=0.3)
+                        plt.tight_layout()
+                        
+                        # Display graph - works in both Jupyter and regular Python
+                        if IPYTHON_AVAILABLE:
+                            display(fig)  # Better for Jupyter
+                        else:
+                            plt.show()  # For regular Python
+                        print(f"      ✅ Graph displayed for {model_name}")
+                    except Exception as e:
+                        print(f"      ⚠️ Error displaying graph for {model_name}: {e}")
+                        # Try alternative display method
+                        try:
+                            plt.show()
+                        except:
+                            pass
                     
                     # Print top features
                     print(f"      Top 10 Features for {model_name} ({method_used}):")
