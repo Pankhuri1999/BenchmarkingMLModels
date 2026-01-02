@@ -251,9 +251,17 @@ def _extract_original_column_name(feature_name: str, include_category: bool = Tr
             return f"{col_name} ({category})"
         return col_name
     
-    # Handle "Unnamed" columns
-    if "Unnamed" in name:
+    # Handle pandas "Unnamed" index columns (e.g., "Unnamed: 0", "Unnamed: 1")
+    # Only replace if it matches the exact pattern "Unnamed: <number>"
+    # Don't replace if "Unnamed" is just part of a legitimate column name
+    import re
+    # Match only exact pandas index column pattern: "Unnamed: 0", "Unnamed: 1", etc.
+    if re.match(r'^Unnamed:\s*\d+$', name.strip()):
         return "Index"
+    
+    # If name is empty or just whitespace after processing, return as-is rather than "Index"
+    if not name or name.strip() == "":
+        return name
     
     return name
 
@@ -283,6 +291,10 @@ def perform_shap_analysis_pipeline_model(
     out_dir: str = "shap_outputs",
     shap_sample_size: int = 200
 ):
+    """
+    Perform SHAP analysis on a trained pipeline model.
+    Uses original column names from X_train_raw/X_test_raw when possible.
+    """
     _safe_makedirs(out_dir)
     _ensure_shap_js()
 
@@ -320,11 +332,39 @@ def perform_shap_analysis_pipeline_model(
 
         try:
             raw_feature_names = preprocess.get_feature_names_out()
+            # Get original column names from the raw dataframe for better mapping
+            original_columns = list(X_train_raw.columns) if hasattr(X_train_raw, 'columns') else []
+            
             # Extract original column names - show just column names for clarity in y-axis
             # For one-hot encoded: "cat__ColumnName__Value" -> "ColumnName"
             # For TF-IDF: "tfidf_ColumnName__word" -> "ColumnName" 
             # For numeric: "num__ColumnName" -> "ColumnName"
-            feature_names = [_extract_original_column_name(x, include_category=False) for x in raw_feature_names]
+            feature_names = []
+            for raw_name in raw_feature_names:
+                extracted = _extract_original_column_name(raw_name, include_category=False)
+                
+                # If we got "Index" but the raw name might contain an actual column name, try to find it
+                if extracted == "Index" and original_columns:
+                    # Try to find if any original column name appears in the raw feature name
+                    found_col = None
+                    for orig_col in original_columns:
+                        # Check various patterns where the column name might appear
+                        if (orig_col in raw_name and 
+                            (raw_name.startswith(f"num__{orig_col}") or 
+                             raw_name.startswith(f"cat__{orig_col}") or
+                             raw_name.startswith(f"tfidf_{orig_col}") or
+                             f"__{orig_col}__" in raw_name or
+                             raw_name.endswith(f"__{orig_col}"))):
+                            found_col = orig_col
+                            break
+                    
+                    if found_col:
+                        feature_names.append(found_col)
+                    else:
+                        feature_names.append(extracted)
+                else:
+                    feature_names.append(extracted)
+                    
         except Exception:
             feature_names = [f"f{i}" for i in range(X_test_s_dense.shape[1])]
 
