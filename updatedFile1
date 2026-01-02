@@ -518,6 +518,13 @@ def comprehensive_ml_pipeline(
 
     df = pd.read_csv(dataset_path) if isinstance(dataset_path, str) else dataset_path.copy()
 
+    # Drop columns with "Unnamed" in their name (pandas index columns)
+    # Keep the target_column even if it has "Unnamed" (unlikely but safe)
+    columns_to_drop = [col for col in df.columns if "Unnamed" in str(col) and col != target_column]
+    if columns_to_drop:
+        print(f"  🗑️  Dropping {len(columns_to_drop)} column(s) with 'Unnamed' in name: {columns_to_drop}")
+        df = df.drop(columns=columns_to_drop)
+
     df, was_transformed = detect_and_transform_wide_format(df)
     if was_transformed and target_column == "auto":
         target_column = "Value"
