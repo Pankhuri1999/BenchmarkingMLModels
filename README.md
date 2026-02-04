@@ -127,29 +127,29 @@ Use `Overall.py` to execute all five tasks in a single run.
 
 ## Methodology
 
-Dataset loading
+- Dataset loading
 
-Optional reframing (Enrollment & Budget only)
+- Optional reframing (Enrollment & Budget only)
 
-Missing value handling and encoding
+- Missing value handling and encoding
 
-Automatic task identification
+- Automatic task identification
 
-Model training
+- Model training
 
-Optional hyperparameter tuning
+- Optional hyperparameter tuning
 
-Performance evaluation
+- Performance evaluation
 
-SHAP-based feature attribution
+- SHAP-based feature attribution
 
-Fairness assessment
+- Fairness assessment
 
-Data quality scoring
+- Data quality scoring
 
-Scalability estimation
+- Scalability estimation
 
-Readiness Index computation
+- Readiness Index computation
 
 ## Requirements
 Python ≥ 3.8
