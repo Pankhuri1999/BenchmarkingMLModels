@@ -126,46 +126,72 @@ Use `singleFramework.py` if you want to run any task individually.
 Use `Overall.py` to execute all five tasks in a single run.
 
 ## Methodology
+
 Dataset loading
+
 Optional reframing (Enrollment & Budget only)
+
 Missing value handling and encoding
+
 Automatic task identification
+
 Model training
+
 Optional hyperparameter tuning
+
 Performance evaluation
+
 SHAP-based feature attribution
+
 Fairness assessment
+
 Data quality scoring
+
 Scalability estimation
+
 Readiness Index computation
 
 ## Requirements
 Python ≥ 3.8
+
 pip install numpy pandas scikit-learn matplotlib shap jupyter
 
 Optional:
+
 pip install xgboost lightgbm
 
 ## Usage
 Run individual task -
+
 python StudentEnrollment/StudentEnrollmentPythonFileCode.py
 
 Run all tasks -
+
 python Overall.py
 
 ## Computing Infrastructure
+
 Experiments were conducted using Jupyter Notebook environments (Google Colab and local CPU systems):
+
 Operating System: Windows / Linux
+
 Python ≥ 3.8
+
 CPU-based execution
+
 RAM: ~8–12 GB
+
 GPU: Not required
 
 ## Reproducibility
 To reproduce results:
+
 Clone the repository
+
 Install required packages
+
 Run individual task pipelines, singleFramework.py, or execute Overall.py
+
 All datasets, notebooks, preprocessing scripts, and pipelines are included.
 
 
