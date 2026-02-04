@@ -125,29 +125,7 @@ Use `singleFramework.py` if you want to run any task individually.
 
 Use `Overall.py` to execute all five tasks in a single run.
 
-### Example Unified Call
-
-```python
-results_dropout = comprehensive_ml_pipeline(
-    dataset_path="retention/dataset.csv",
-    target_column="Target",
-    task_type="auto",
-    fast_mode="auto",
-    do_hyperparam_tuning=True,
-    compute_shap=True,
-    use_tfidf=False
-)
-
-You may modify: dataset_path, target_column, do_hyperparam_tuning (True/False), compute_shap (True/False), use_tfidf (True/False, only for text features)
-
-### Usage
-Run individual task -
-python StudentEnrollment/StudentEnrollmentPythonFileCode.py
-
-Run all tasks -
-python Overall.py
-
-### Methodology
+## Methodology
 Dataset loading
 Optional reframing (Enrollment & Budget only)
 Missing value handling and encoding
@@ -161,14 +139,21 @@ Data quality scoring
 Scalability estimation
 Readiness Index computation
 
-### Requirements
+## Requirements
 Python ≥ 3.8
 pip install numpy pandas scikit-learn matplotlib shap jupyter
 
 Optional:
 pip install xgboost lightgbm
 
-### Computing Infrastructure
+## Usage
+Run individual task -
+python StudentEnrollment/StudentEnrollmentPythonFileCode.py
+
+Run all tasks -
+python Overall.py
+
+## Computing Infrastructure
 Experiments were conducted using Jupyter Notebook environments (Google Colab and local CPU systems):
 Operating System: Windows / Linux
 Python ≥ 3.8
@@ -176,9 +161,28 @@ CPU-based execution
 RAM: ~8–12 GB
 GPU: Not required
 
-### Reproducibility
+## Reproducibility
 To reproduce results:
 Clone the repository
 Install required packages
 Run individual task pipelines, singleFramework.py, or execute Overall.py
 All datasets, notebooks, preprocessing scripts, and pipelines are included.
+
+
+### Example Unified Call
+
+```python
+results_dropout = comprehensive_ml_pipeline(
+    dataset_path="retention/dataset.csv",
+    target_column="Target",
+    task_type="auto",
+    fast_mode="auto",
+    do_hyperparam_tuning=True,
+    compute_shap=True,
+    use_tfidf=False
+)```
+
+You may modify: dataset_path, target_column, do_hyperparam_tuning (True/False), compute_shap (True/False), use_tfidf (True/False, only for text features)
+
+
+
