@@ -164,6 +164,7 @@ pip install xgboost lightgbm
 Run individual task -
 
 python StudentEnrollment/StudentEnrollmentPythonFileCode.py
+
 And some goes for running other individual tasks. Just run the individual Python files in each folder
 
 Run all tasks -
