@@ -164,6 +164,7 @@ pip install xgboost lightgbm
 Run individual task -
 
 python StudentEnrollment/StudentEnrollmentPythonFileCode.py
+And some goes for running other individual tasks. Just run the individual Python files in each folder
 
 Run all tasks -
 
@@ -206,7 +207,7 @@ results_dropout = comprehensive_ml_pipeline(
     do_hyperparam_tuning=True,
     compute_shap=True,
     use_tfidf=False
-)```
+)
 
 You may modify: dataset_path, target_column, do_hyperparam_tuning (True/False), compute_shap (True/False), use_tfidf (True/False, only for text features)
 
