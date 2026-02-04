@@ -1,6 +1,6 @@
 
 import pandas as pd
-
+df = pd.read_csv('budget/BudgetPrediction.csv')
 df["Total"] = pd.to_numeric(df["Total"], errors="coerce").fillna(0)
 
 
