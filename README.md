@@ -119,11 +119,11 @@ For these tasks:
 
 ### Run Individual Tasks
 
-Use `singleFramework.py` if you want to run any task individually.
+Use `singleFramework.py` if you want to run any task individually. (Don`t forget to change the path of the dataset while code execution)
 
 ### Run All Tasks Together
 
-Use `Overall.py` to execute all five tasks in a single run.
+Use `Overall.py` to execute all five tasks in a single run. (Don`t forget to change the path of the dataset while code execution)
 
 ## Methodology
 
